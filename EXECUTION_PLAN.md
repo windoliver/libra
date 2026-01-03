@@ -6,10 +6,41 @@ This document provides a granular execution plan for building the Aquarius tradi
 
 ---
 
-## Phase 1: Foundation (Weeks 1-2)
+## Phase 1: Foundation (Weeks 1-4)
 
 ### Goal
 Establish core infrastructure that all other components will build upon.
+
+### Strategy: Python MVP First, Then Rust Hot Paths
+
+Based on deep research of NautilusTrader and HFT performance benchmarks, we split Phase 1:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    PHASE 1 STRATEGY                             │
+│                                                                 │
+│  Phase 1A (Weeks 1-2): Python MVP                               │
+│  ════════════════════════════════                               │
+│  • Build everything in Python first                             │
+│  • Validate architecture and interfaces                         │
+│  • Get end-to-end flow working                                  │
+│  • Target: Functional, not optimal                              │
+│                                                                 │
+│  Phase 1B (Weeks 3-4): Rust Hot Paths                           │
+│  ════════════════════════════════════                           │
+│  • Profile Python MVP, find actual bottlenecks                  │
+│  • Create libra-core Rust crate                                 │
+│  • Migrate: Message Bus, Risk Engine, Indicators                │
+│  • Target: <100ms signal-to-order, <1ms dispatch                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Why This Approach?
+
+1. **Validate Before Optimize**: Don't write Rust for the wrong abstractions
+2. **Measure Real Bottlenecks**: Profile shows where Rust is actually needed
+3. **Faster Iteration**: Python prototype in days, not weeks
+4. **Risk Reduction**: Working system before optimization
 
 ### 1.1 Message Bus Implementation
 
@@ -236,19 +267,170 @@ Task 1.5.2: Basic Widgets
 └── Estimated Effort: 8 hours
 ```
 
-### Phase 1 Milestones
+### Phase 1A Milestones (Python MVP)
 
 | Milestone | Tasks | Deliverable |
 |-----------|-------|-------------|
-| M1.1 | 1.1.1-1.1.2 | Working message bus |
-| M1.2 | 1.2.1-1.2.2 | Can connect to Binance testnet |
-| M1.3 | 1.2.3, 1.3.1-1.3.2 | Paper trading works |
-| M1.4 | 1.4.1-1.4.3 | Risk checks enforced |
-| M1.5 | 1.5.1-1.5.2 | TUI launches and shows data |
+| M1A.1 | 1.1.1-1.1.2 | Working message bus (Python) |
+| M1A.2 | 1.2.1-1.2.2 | Can connect to Binance testnet |
+| M1A.3 | 1.2.3, 1.3.1-1.3.2 | Paper trading works |
+| M1A.4 | 1.4.1-1.4.3 | Risk checks enforced |
+| M1A.5 | 1.5.1-1.5.2 | TUI launches and shows data |
 
 ---
 
-## Phase 2: First Integration (Weeks 3-4)
+### 1.6 Phase 1B: Rust Core Migration (Weeks 3-4)
+
+**Priority: P0 (Performance Critical)**
+
+```
+Task 1.6.1: Rust Crate Setup
+├── Files: libra-core/Cargo.toml, libra-core/src/lib.rs
+├── Description: Initialize Rust crate with PyO3 bindings
+├── Subtasks:
+│   ├── [ ] Create Cargo workspace structure
+│   ├── [ ] Configure PyO3 and maturin
+│   ├── [ ] Set up CI for Rust builds
+│   ├── [ ] Create Python stub files for IDE support
+│   └── [ ] Benchmark harness setup
+├── Acceptance Criteria:
+│   ├── `import libra_core` works in Python
+│   ├── Rust tests pass
+│   └── Maturin builds wheel
+└── Estimated Effort: 6 hours
+
+Task 1.6.2: Rust Message Bus Core
+├── File: libra-core/src/message_bus.rs
+├── Dependencies: Task 1.6.1, Task 1.1.2 (Python reference)
+├── Subtasks:
+│   ├── [ ] Lock-free MPSC queue (crossbeam)
+│   ├── [ ] Event dispatch with zero-copy
+│   ├── [ ] Handler registration via PyO3
+│   ├── [ ] Async runtime integration (tokio)
+│   └── [ ] Benchmark vs Python implementation
+├── Acceptance Criteria:
+│   ├── <1ms dispatch latency (P99)
+│   ├── 10x+ improvement over Python
+│   ├── Drop-in replacement for Python bus
+│   └── No GC pauses
+└── Estimated Effort: 16 hours
+
+Task 1.6.3: Rust Risk Engine
+├── File: libra-core/src/risk.rs
+├── Dependencies: Task 1.6.1
+├── Subtasks:
+│   ├── [ ] Pre-trade risk checks (all in one pass)
+│   ├── [ ] Position limit validation
+│   ├── [ ] Drawdown calculation
+│   ├── [ ] Rate limiting (token bucket)
+│   └── [ ] PyO3 bindings
+├── Acceptance Criteria:
+│   ├── <100μs per risk check
+│   ├── Same logic as Python (validated)
+│   └── Zero allocations in hot path
+└── Estimated Effort: 12 hours
+
+Task 1.6.4: Rust Technical Indicators
+├── File: libra-core/src/indicators.rs
+├── Dependencies: Task 1.6.1
+├── Subtasks:
+│   ├── [ ] EMA, SMA, RSI, MACD
+│   ├── [ ] Bollinger Bands
+│   ├── [ ] SIMD optimization where applicable
+│   ├── [ ] Streaming (incremental) calculation
+│   └── [ ] NumPy array integration
+├── Acceptance Criteria:
+│   ├── 50x+ faster than pandas-ta
+│   ├── Identical results (validated)
+│   └── Works with numpy arrays directly
+└── Estimated Effort: 12 hours
+
+Task 1.6.5: Rust WebSocket Parser
+├── File: libra-core/src/ws_parser.rs
+├── Dependencies: Task 1.6.1
+├── Subtasks:
+│   ├── [ ] JSON parsing (simd-json)
+│   ├── [ ] Market data normalization
+│   ├── [ ] Zero-copy message handling
+│   └── [ ] Binance/Bybit format support
+├── Acceptance Criteria:
+│   ├── <10μs per message parse
+│   ├── Handles malformed data gracefully
+│   └── Memory efficient
+└── Estimated Effort: 8 hours
+```
+
+### Phase 1B Milestones (Rust Core)
+
+| Milestone | Tasks | Deliverable |
+|-----------|-------|-------------|
+| M1B.1 | 1.6.1 | Rust crate builds, imports in Python |
+| M1B.2 | 1.6.2 | Message bus <1ms dispatch |
+| M1B.3 | 1.6.3 | Risk checks <100μs |
+| M1B.4 | 1.6.4-1.6.5 | Indicators 50x faster, WS parsing <10μs |
+
+### Phase 1 Performance Validation
+
+```
+Before proceeding to Phase 2, validate:
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    PERFORMANCE GATES                            │
+│                                                                 │
+│  Component          │ Target         │ Measured │ Status       │
+│  ─────────────────────────────────────────────────────────────  │
+│  Message dispatch   │ <1ms P99       │ ___      │ [ ] Pass     │
+│  Risk check         │ <100μs         │ ___      │ [ ] Pass     │
+│  Indicator calc     │ 50x vs pandas  │ ___      │ [ ] Pass     │
+│  WS message parse   │ <10μs          │ ___      │ [ ] Pass     │
+│  Signal-to-order    │ <100ms         │ ___      │ [ ] Pass     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Message Bus Best Practices (from Deep Research)
+
+Based on analysis of LMAX Disruptor, NautilusTrader, and industry benchmarks:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│              MESSAGE BUS IMPLEMENTATION STRATEGY                 │
+│                                                                 │
+│  PHASE 1A (Python MVP):                                         │
+│  ══════════════════════                                         │
+│  • Use asyncio.PriorityQueue with @dataclass(order=True)       │
+│  • Priority levels: Risk(0) > Orders(1) > Signals(2) > Data(3) │
+│  • Frozen dataclasses with slots=True for memory efficiency    │
+│  • W3C Trace Context compatible trace_id/span_id               │
+│  • Graceful shutdown with queue draining (5s timeout)          │
+│  • Target: <100μs dispatch, 100K-500K events/sec               │
+│                                                                 │
+│  PHASE 1B (Rust Core):                                          │
+│  ═════════════════════                                          │
+│  • ringbuf crate for lock-free SPSC ring buffers               │
+│  • Separate ring buffer per priority (no heap allocation)       │
+│  • Cache-line padding (120 bytes) for sequence counters        │
+│  • PyO3 with allow_threads for GIL release                     │
+│  • crossbeam-channel for MPSC scenarios                        │
+│  • Target: <1μs dispatch, >1M events/sec                       │
+│                                                                 │
+│  KEY INSIGHTS:                                                  │
+│  ═════════════                                                  │
+│  • False sharing kills perf 10-100x → cache-line padding       │
+│  • Separate queues > heap priority queue in hot path           │
+│  • Python GIL = bottleneck for <1μs → requires Rust core       │
+│  • SPSC queues much faster than MPSC/MPMC                      │
+│  • Batch ops (push_slice) reduce cache sync overhead           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Reference Implementations:**
+- [NautilusTrader MessageBus](https://nautilustrader.io/docs/nightly/concepts/message_bus/)
+- [LMAX Disruptor](https://lmax-exchange.github.io/disruptor/)
+- [ringbuf crate](https://crates.io/crates/ringbuf)
+
+---
+
+## Phase 2: First Integration (Weeks 5-6)
 
 ### Goal
 Integrate Freqtrade strategies and build usable backtesting.

@@ -243,6 +243,82 @@ Aquarius leverages the existing Nexus infrastructure:
 | **Agent Framework** | LangGraph | Proven multi-agent orchestration, integrates with Nexus |
 | **TUI Framework** | Textual | Modern Python TUI, async-native |
 
+### 3.3 Hybrid Rust/Python Architecture (ADR-001)
+
+Based on analysis of NautilusTrader (17k stars) and performance benchmarks, we adopt a **hybrid architecture**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           PERFORMANCE ANALYSIS                                   │
+│                                                                                 │
+│  Metric                    │ Pure Python    │ Rust Core      │ Improvement     │
+│  ─────────────────────────────────────────────────────────────────────────────  │
+│  Quote processing          │ 250-500 μs     │ 12 μs          │ 20-80x faster   │
+│  Trade message processing  │ ~400 μs        │ 6 μs           │ ~65x faster     │
+│  Cryptographic signing     │ 45 ms          │ 0.05 ms        │ 900x faster     │
+│  P99 latency              │ 3ms (GC spikes)│ Predictable    │ Critical        │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Components by Language
+
+**Rust Core (`libra-core` crate):**
+```
+├── Message Bus dispatch loop (target: <1ms)
+├── Order matching engine
+├── Risk check engine (pre-trade validation)
+├── Technical indicator calculations (EMA, RSI, etc.)
+├── WebSocket frame parsing
+├── Cryptographic signing (ed25519, secp256k1)
+└── Time-series data structures
+```
+
+**Python Layer:**
+```
+├── Strategy definitions & adapters (Freqtrade, Hummingbot)
+├── LLM Agent orchestration (LangGraph)
+├── TUI application (Textual)
+├── Configuration management
+├── Gateway wrappers (CCXT)
+├── Backtesting orchestration
+└── Natural language interface
+```
+
+#### Why This Split?
+
+1. **GIL Problem**: Python's Global Interpreter Lock prevents true concurrency
+2. **GC Latency**: Python's garbage collector causes unpredictable 3ms+ spikes
+3. **Ecosystem**: CCXT, pandas, LangGraph, Textual are Python-native
+4. **Development Velocity**: Python is 3-5x faster for prototyping
+5. **Proven Pattern**: NautilusTrader uses identical architecture
+
+#### Integration via PyO3
+
+```python
+# Python side - seamless integration
+from libra_core import MessageBus, RiskEngine, indicators
+
+bus = MessageBus()
+risk = RiskEngine(limits)
+
+# Rust executes in microseconds, returns to Python
+result = risk.check_order(order, positions)
+ema_values = indicators.ema(prices, period=20)
+```
+
+### 3.4 Database Selection (ADR-002)
+
+**Decision: QuestDB over TimescaleDB**
+
+| Feature | QuestDB | TimescaleDB |
+|---------|---------|-------------|
+| Ingestion rate | 4-11.4M rows/sec | 620K-1.2M rows/sec |
+| ASOF JOIN (backtesting) | **Yes** | No |
+| High cardinality scaling | Excellent | Degrades |
+| Financial optimization | Native | Generic |
+
+ASOF JOIN is critical for point-in-time accurate backtesting (prevents look-ahead bias).
+
 ---
 
 ## 4. Core Components
