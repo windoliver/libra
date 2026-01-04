@@ -11,9 +11,12 @@ authors = [
 keywords = ["trading", "algorithmic-trading", "message-bus", "async", "high-performance"]
 
 dependencies = [
-    "msgspec>=0.18",       # Fast structs (4x faster than dataclass)
-    "aiohttp>=3.9",        # Async HTTP client
-    "rich>=13.0",          # Pretty terminal output
+    "msgspec>=0.18",                           # Fast structs (4x faster than dataclass)
+    "aiohttp>=3.9",                            # Async HTTP client
+    "rich>=13.0",                              # Pretty terminal output
+    "orjson>=3.10",                            # 10x faster JSON serialization
+    "uvloop>=0.21; sys_platform != 'win32'",   # 2-4x faster asyncio (Unix only)
+    "polars>=1.0",                             # 10-3500x faster than pandas
 ]
 
 [project.optional-dependencies]
@@ -187,6 +190,9 @@ module = [
     "pytest.*",
     "pytest_asyncio.*",
     "pytest_benchmark.*",
+    "orjson.*",
+    "uvloop.*",
+    "polars.*",
 ]
 ignore_missing_imports = true
 
