@@ -17,6 +17,7 @@ from libra.core.events import (
     encode_event,
 )
 from libra.core.message_bus import (
+    EventFilter,
     Handler,
     MessageBus,
     MessageBusConfig,
@@ -27,6 +28,7 @@ from libra.core.message_bus import (
 __all__ = [
     "EVENT_PRIORITY_MAP",
     "Event",
+    "EventFilter",
     "EventType",
     "Handler",
     "MessageBus",
