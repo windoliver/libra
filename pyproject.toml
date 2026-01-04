@@ -78,6 +78,7 @@ markers = [
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
+    "ignore::pytest.PytestUnraisableExceptionWarning",  # Async cleanup warnings
 ]
 
 # =============================================================================
