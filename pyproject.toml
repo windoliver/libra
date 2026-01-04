@@ -24,6 +24,8 @@ dev = [
     "pytest-benchmark>=4.0",
     "pytest-cov>=4.0",
     "pytest-xdist>=3.5",   # Parallel test execution
+    # Benchmarking
+    "hdrhistogram>=0.10",  # High-precision latency histograms
     # Linting & Formatting
     "ruff>=0.8",
     "mypy>=1.8",
@@ -77,6 +79,17 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
 ]
+
+# =============================================================================
+# pytest-benchmark
+# =============================================================================
+[tool.pytest.benchmark]
+disable_gc = true
+warmup = true
+warmup_iterations = 1000
+min_rounds = 30
+max_time = 5.0
+timer = "time.perf_counter_ns"
 
 # =============================================================================
 # ruff - Fast Python linter & formatter
@@ -133,8 +146,11 @@ ignore = [
     "PLR2004", # Magic values in tests are fine
 ]
 "benchmarks/**/*.py" = [
-    "S101",
-    "PLR2004",
+    "S101",      # assert is fine in benchmarks
+    "PLR2004",   # Magic values in benchmarks are fine
+    "ARG001",    # Unused function args (handler signatures)
+    "ARG002",    # Unused method args (fixtures for side-effects)
+    "PLR0915",   # Too many statements (benchmark summaries)
 ]
 
 [tool.ruff.lint.isort]

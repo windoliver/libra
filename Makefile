@@ -23,7 +23,15 @@ help:
 	@echo "  make test         Run tests"
 	@echo "  make test-cov     Run tests with coverage"
 	@echo "  make test-fast    Run tests in parallel"
-	@echo "  make bench        Run benchmarks"
+	@echo ""
+	@echo "Benchmarks:"
+	@echo "  make bench            Run all benchmarks"
+	@echo "  make bench-quick      Quick summary benchmark"
+	@echo "  make bench-throughput Throughput benchmarks (pytest-benchmark)"
+	@echo "  make bench-latency    Latency distribution (HDR Histogram)"
+	@echo "  make bench-e2e        End-to-end benchmarks"
+	@echo "  make bench-save       Save benchmark results to JSON"
+	@echo "  make bench-compare    Compare with saved results"
 	@echo ""
 	@echo "Maintenance:"
 	@echo "  make clean        Remove build artifacts"
@@ -88,8 +96,23 @@ test-integration:
 bench:
 	pytest benchmarks/ --benchmark-only -v
 
+bench-throughput:
+	pytest benchmarks/bench_publish.py -v -m bench_throughput --benchmark-only
+
+bench-latency:
+	pytest benchmarks/bench_latency.py -v -s
+
+bench-e2e:
+	pytest benchmarks/bench_full_cycle.py -v -s
+
 bench-save:
-	pytest benchmarks/ --benchmark-only --benchmark-autosave
+	pytest benchmarks/ --benchmark-only --benchmark-autosave --benchmark-json=.benchmarks/latest.json
+
+bench-compare:
+	pytest benchmarks/ --benchmark-only --benchmark-compare
+
+bench-quick:
+	pytest benchmarks/bench_full_cycle.py::TestBenchmarkSummary -v -s
 
 # =============================================================================
 # Maintenance
