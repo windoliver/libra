@@ -1,0 +1,71 @@
+name: Gateway Request
+description: Request a new exchange/broker gateway
+title: "[Gateway] "
+labels: ["gateway", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Request support for a new exchange or broker gateway.
+
+  - type: input
+    id: gateway-name
+    attributes:
+      label: Gateway Name
+      description: Name of the exchange or broker
+      placeholder: e.g., Binance, Alpaca, Interactive Brokers
+    validations:
+      required: true
+
+  - type: input
+    id: website
+    attributes:
+      label: Website/Documentation
+      description: Link to the exchange/broker API documentation
+      placeholder: https://docs.example.com/api
+    validations:
+      required: true
+
+  - type: dropdown
+    id: gateway-type
+    attributes:
+      label: Gateway Type
+      options:
+        - Crypto Exchange
+        - Stock Broker
+        - Futures Broker
+        - Options Broker
+        - Multi-Asset
+        - Data Provider Only
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Required Features
+      description: Which features do you need from this gateway?
+      options:
+        - label: Market Data (quotes/bars)
+        - label: Order Execution
+        - label: Account/Portfolio Info
+        - label: Historical Data
+        - label: WebSocket Streaming
+        - label: Paper Trading
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Describe your use case for this gateway
+      placeholder: I need this gateway because...
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      description: Would you be willing to help implement this gateway?
+      options:
+        - label: I would be willing to contribute to this implementation
