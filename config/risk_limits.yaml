@@ -1,0 +1,42 @@
+# LIBRA Risk Limits Configuration
+# All percentage values are decimals (e.g., 0.03 = 3%)
+
+# === Global Position Limits ===
+max_total_exposure: 100000          # Maximum total portfolio exposure
+max_single_position_pct: 0.20       # Max 20% of portfolio in single position
+
+# === Loss Limits (must be negative) ===
+max_daily_loss_pct: -0.03           # -3% daily loss triggers REDUCING state
+max_weekly_loss_pct: -0.07          # -7% weekly loss limit
+max_total_drawdown_pct: -0.15       # -15% max drawdown triggers HALTED state
+
+# === Circuit Breaker Thresholds ===
+circuit_breaker_drawdown_pct: -0.05         # -5% drawdown trips circuit breaker
+circuit_breaker_cooldown_seconds: 300        # 5 minute cooldown period
+circuit_breaker_max_consecutive_losses: 10   # 10 consecutive losses trips breaker
+
+# === Rate Limits ===
+max_orders_per_second: 10
+max_orders_per_minute: 100
+
+# === Default Limits (for unconfigured symbols) ===
+default_max_position_size: 1.0
+default_max_notional_per_order: 10000
+default_max_order_rate: 10
+
+# === Per-Symbol Limits ===
+symbol_limits:
+  BTC/USDT:
+    max_position_size: 1.0
+    max_notional_per_order: 50000
+    max_order_rate: 5
+
+  ETH/USDT:
+    max_position_size: 10.0
+    max_notional_per_order: 25000
+    max_order_rate: 5
+
+  SOL/USDT:
+    max_position_size: 100.0
+    max_notional_per_order: 10000
+    max_order_rate: 10
