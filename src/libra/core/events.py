@@ -32,9 +32,14 @@ class EventType(Enum):
 
     # Orders (Priority: ORDERS)
     ORDER_NEW = auto()
+    ORDER_SUBMITTED = auto()  # Order submitted to gateway
+    ORDER_ACCEPTED = auto()  # Order accepted by exchange
     ORDER_FILLED = auto()
+    ORDER_PARTIALLY_FILLED = auto()  # Partial fill
     ORDER_CANCELLED = auto()
     ORDER_REJECTED = auto()
+    ORDER_MODIFIED = auto()  # Order modified
+    ORDER_EXPIRED = auto()  # Order expired
 
     # Positions (Priority: ORDERS)
     POSITION_OPENED = auto()
@@ -54,6 +59,10 @@ class EventType(Enum):
     GATEWAY_DISCONNECTED = auto()
     STRATEGY_STARTED = auto()
     STRATEGY_STOPPED = auto()
+    ACTOR_STARTED = auto()  # Actor lifecycle
+    ACTOR_STOPPED = auto()
+    ACTOR_DEGRADED = auto()
+    ACTOR_FAULTED = auto()
 
 
 class Priority(IntEnum):
@@ -81,9 +90,14 @@ EVENT_PRIORITY_MAP: dict[EventType, Priority] = {
     EventType.CIRCUIT_BREAKER: Priority.RISK,
     # Order events
     EventType.ORDER_NEW: Priority.ORDERS,
+    EventType.ORDER_SUBMITTED: Priority.ORDERS,
+    EventType.ORDER_ACCEPTED: Priority.ORDERS,
     EventType.ORDER_FILLED: Priority.ORDERS,
+    EventType.ORDER_PARTIALLY_FILLED: Priority.ORDERS,
     EventType.ORDER_CANCELLED: Priority.ORDERS,
     EventType.ORDER_REJECTED: Priority.ORDERS,
+    EventType.ORDER_MODIFIED: Priority.ORDERS,
+    EventType.ORDER_EXPIRED: Priority.ORDERS,
     EventType.POSITION_OPENED: Priority.ORDERS,
     EventType.POSITION_CLOSED: Priority.ORDERS,
     EventType.POSITION_UPDATED: Priority.ORDERS,
@@ -97,6 +111,10 @@ EVENT_PRIORITY_MAP: dict[EventType, Priority] = {
     EventType.GATEWAY_DISCONNECTED: Priority.MARKET_DATA,
     EventType.STRATEGY_STARTED: Priority.MARKET_DATA,
     EventType.STRATEGY_STOPPED: Priority.MARKET_DATA,
+    EventType.ACTOR_STARTED: Priority.MARKET_DATA,
+    EventType.ACTOR_STOPPED: Priority.MARKET_DATA,
+    EventType.ACTOR_DEGRADED: Priority.MARKET_DATA,
+    EventType.ACTOR_FAULTED: Priority.RISK,  # Faults are high priority
 }
 
 

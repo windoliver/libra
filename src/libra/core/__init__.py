@@ -6,8 +6,12 @@ This module provides the core messaging infrastructure:
 - EventType: All event types in the system
 - Priority: Event priority levels (RISK > ORDERS > SIGNALS > MARKET_DATA)
 - MessageBus: Async priority-based message bus
+- Cache: Shared state cache for orders, positions, market data
+- Clock: Time and scheduling utilities
 """
 
+from libra.core.cache import Cache
+from libra.core.clock import Clock, ClockType
 from libra.core.events import (
     EVENT_PRIORITY_MAP,
     Event,
@@ -26,6 +30,9 @@ from libra.core.message_bus import (
 
 
 __all__ = [
+    "Cache",
+    "Clock",
+    "ClockType",
     "EVENT_PRIORITY_MAP",
     "Event",
     "EventFilter",

@@ -89,7 +89,7 @@ filterwarnings = [
 # =============================================================================
 # pytest-benchmark
 # =============================================================================
-[tool.pytest.benchmark]
+[tool.pytest-benchmark]
 disable_gc = true
 warmup = true
 warmup_iterations = 1000

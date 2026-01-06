@@ -2,10 +2,12 @@
 LIBRA Strategies: Unified strategy interface for backtest and live trading.
 
 This module provides:
-- Strategy Protocol: Standard interface for all strategies
+- Actor Protocol: Base component with lifecycle and event handling
+- Strategy Protocol: Trading strategy with order management
 - Signal types: LONG, SHORT, CLOSE_LONG, CLOSE_SHORT, HOLD
 - BacktestResult: Comprehensive performance metrics
-- BaseStrategy: Abstract base class with common utilities
+- BaseActor: Abstract base class for actors
+- BaseStrategy: Abstract base class for strategies with order routing
 - Example strategies: Reference implementations
 
 Same interface works for both backtest and live trading (event-driven architecture).
@@ -28,7 +30,7 @@ Examples:
         if signal:
             print(f"{signal.signal_type}: {signal.symbol}")
 
-    # Creating custom strategies
+    # Creating custom strategies with lifecycle
     from libra.strategies import BaseStrategy, Bar, Signal, SignalType
 
     class MyStrategy(BaseStrategy):
@@ -36,16 +38,24 @@ Examples:
         def name(self) -> str:
             return "my_strategy"
 
-        def on_bar(self, bar: Bar) -> Signal | None:
-            # Your strategy logic here
+        async def on_bar(self, bar: Bar) -> None:
             if some_condition:
-                return self._long(price=bar.close)
-            return None
+                await self.buy_market(bar.symbol, Decimal("0.1"))
+
+        async def on_order_filled(self, event: OrderFilledEvent) -> None:
+            self.log.info(f"Filled: {event.fill_amount}")
 """
 
-# Protocol and types
-# Base class
-from libra.strategies.base import BaseStrategy
+# Actor module - lifecycle and event handling
+from libra.strategies.actor import (
+    Actor,
+    BaseActor,
+    ComponentState,
+    InvalidStateTransition,
+)
+
+# Legacy base class (for backwards compatibility)
+from libra.strategies.base import BaseStrategy as LegacyBaseStrategy
 
 # Example strategies
 from libra.strategies.examples import SMACrossConfig, SMACrossStrategy
@@ -54,7 +64,7 @@ from libra.strategies.protocol import (
     Bar,
     Signal,
     SignalType,
-    Strategy,
+    Strategy as LegacyStrategy,
     StrategyConfig,
     decode_bar,
     decode_signal,
@@ -62,11 +72,41 @@ from libra.strategies.protocol import (
     encode_signal,
 )
 
+# New Strategy module with order management
+from libra.strategies.strategy import (
+    BaseStrategy,
+    OrderAcceptedEvent,
+    OrderCanceledEvent,
+    OrderFilledEvent,
+    OrderRejectedEvent,
+    OrderSubmittedEvent,
+    PositionChangedEvent,
+    PositionClosedEvent,
+    PositionOpenedEvent,
+    Strategy,
+)
+
 
 __all__ = [
+    # Actor
+    "Actor",
+    "BaseActor",
+    "ComponentState",
+    "InvalidStateTransition",
+    # Strategy
     "BacktestResult",
     "Bar",
     "BaseStrategy",
+    "LegacyBaseStrategy",
+    "LegacyStrategy",
+    "OrderAcceptedEvent",
+    "OrderCanceledEvent",
+    "OrderFilledEvent",
+    "OrderRejectedEvent",
+    "OrderSubmittedEvent",
+    "PositionChangedEvent",
+    "PositionClosedEvent",
+    "PositionOpenedEvent",
     "SMACrossConfig",
     "SMACrossStrategy",
     "Signal",
