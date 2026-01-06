@@ -3,7 +3,7 @@ name = "libra"
 version = "0.1.0"
 description = "High-performance AI trading platform with LMAX Disruptor-inspired message bus"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = {text = "MIT"}
 authors = [
     {name = "Libra Team"}

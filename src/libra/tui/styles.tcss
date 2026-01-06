@@ -1,0 +1,209 @@
+/* LIBRA Trading Terminal - Professional Dark Theme
+ *
+ * Inspired by:
+ * - Bloomberg Terminal (information-dense, professional)
+ * - Dolphie (real-time monitoring dashboards)
+ * - Harlequin (polished SQL IDE)
+ *
+ * Design principles:
+ * 1. Use DEFAULT_CSS in widgets for encapsulation
+ * 2. Keep external CSS for layout only
+ * 3. Use Textual's semantic color system
+ * 4. Round borders for modern look
+ */
+
+/* ============================================================================
+   SCREEN LAYOUT
+   ============================================================================ */
+
+Screen {
+    background: $surface;
+    layout: vertical;
+}
+
+/* ============================================================================
+   HEADER & FOOTER
+   ============================================================================ */
+
+Header {
+    dock: top;
+    background: $primary-darken-2;
+}
+
+Footer {
+    dock: bottom;
+    background: $primary-darken-3;
+}
+
+/* ============================================================================
+   TABBED CONTENT
+   ============================================================================ */
+
+#main-tabs {
+    height: 1fr;
+    min-height: 10;
+}
+
+TabbedContent > ContentSwitcher {
+    height: 1fr;
+}
+
+TabPane {
+    padding: 0;
+}
+
+Tabs {
+    background: $surface-darken-1;
+}
+
+Tab {
+    padding: 0 2;
+}
+
+Tab:focus {
+    text-style: bold;
+}
+
+Tab.-active {
+    background: $primary;
+    color: $text;
+}
+
+/* ============================================================================
+   MAIN PANELS (Dashboard view)
+   ============================================================================ */
+
+#main-panels {
+    height: 100%;
+    layout: horizontal;
+    padding: 0 1;
+}
+
+/* ============================================================================
+   PANEL TITLES
+   ============================================================================ */
+
+.panel-title {
+    height: 1;
+    background: $primary-darken-2;
+    color: $text;
+    text-style: bold;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+/* ============================================================================
+   DATA TABLES
+   ============================================================================ */
+
+DataTable {
+    height: 1fr;
+    background: $surface;
+}
+
+DataTable > .datatable--header {
+    background: $primary-background;
+    color: $text;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $secondary-darken-1;
+    color: $text;
+}
+
+DataTable:focus > .datatable--cursor {
+    background: $secondary;
+}
+
+DataTable > .datatable--even-row {
+    background: $surface;
+}
+
+DataTable > .datatable--odd-row {
+    background: $surface-darken-1;
+}
+
+/* ============================================================================
+   RULE / DIVIDERS
+   ============================================================================ */
+
+Rule {
+    color: $primary-darken-1;
+    margin: 1 0;
+}
+
+Rule.-horizontal {
+    height: 1;
+    margin: 1 0;
+}
+
+/* ============================================================================
+   TOAST NOTIFICATIONS
+   ============================================================================ */
+
+ToastRack {
+    align: right top;
+    margin: 1 1 0 0;
+}
+
+Toast {
+    padding: 1 2;
+    margin: 0 0 1 0;
+    background: $panel;
+    border: round $primary;
+}
+
+Toast.-information {
+    border: round $primary;
+}
+
+Toast.-warning {
+    border: round $warning;
+    background: $warning-darken-3;
+}
+
+Toast.-error {
+    border: round $error;
+    background: $error-darken-3;
+}
+
+/* ============================================================================
+   COLOR UTILITIES
+   ============================================================================ */
+
+.profit, .positive {
+    color: $success;
+}
+
+.loss, .negative {
+    color: $error;
+}
+
+.warning {
+    color: $warning;
+}
+
+.muted {
+    color: $text-muted;
+}
+
+/* ============================================================================
+   SCROLLBARS
+   ============================================================================ */
+
+* {
+    scrollbar-background: $surface-darken-1;
+    scrollbar-color: $primary-darken-1;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $primary-lighten-1;
+}
+
+/* ============================================================================
+   VERTICAL SCROLL CONTAINERS
+   ============================================================================ */
+
+VerticalScroll {
+    height: 1fr;
+    padding: 0 1;
+}
