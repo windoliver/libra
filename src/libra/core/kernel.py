@@ -32,6 +32,8 @@ from libra.strategies.actor import BaseActor, ComponentState
 
 
 if TYPE_CHECKING:
+    from libra.clients.data_client import DataClient
+    from libra.clients.execution_client import ExecutionClient
     from libra.gateways.protocol import Gateway
     from libra.risk.manager import RiskManager
     from libra.strategies.strategy import BaseStrategy
@@ -196,6 +198,10 @@ class TradingKernel:
         self._gateway: Gateway | None = None
         self._risk_manager: RiskManager | None = None
 
+        # New client architecture (Issue #33)
+        self._data_client: DataClient | None = None
+        self._execution_client: ExecutionClient | None = None
+
         # Actors and strategies (registered by user)
         self._actors: list[BaseActor] = []
         self._strategies: list[BaseStrategy] = []
@@ -264,13 +270,23 @@ class TradingKernel:
 
     @property
     def gateway(self) -> Gateway | None:
-        """Exchange gateway (if set)."""
+        """Exchange gateway (if set) - legacy, prefer data_client/execution_client."""
         return self._gateway
 
     @property
     def risk_manager(self) -> RiskManager | None:
         """Risk manager (if set)."""
         return self._risk_manager
+
+    @property
+    def data_client(self) -> DataClient | None:
+        """Market data client (if set)."""
+        return self._data_client
+
+    @property
+    def execution_client(self) -> ExecutionClient | None:
+        """Order execution client (if set)."""
+        return self._execution_client
 
     # =========================================================================
     # Timestamps
@@ -330,6 +346,62 @@ class TradingKernel:
             )
         self._risk_manager = risk_manager
         logger.info("RiskManager set")
+
+    def set_data_client(self, client: DataClient) -> None:
+        """
+        Set the market data client.
+
+        Args:
+            client: DataClient for market data subscriptions and requests
+
+        Raises:
+            RuntimeError: If kernel is already running
+        """
+        if self._state != KernelState.INITIALIZED:
+            raise RuntimeError(
+                f"Cannot set data client in state {self._state.name}. "
+                "Must be INITIALIZED."
+            )
+        self._data_client = client
+        logger.info("DataClient set: %s", client.name)
+
+    def set_execution_client(self, client: ExecutionClient) -> None:
+        """
+        Set the order execution client.
+
+        Args:
+            client: ExecutionClient for order submission and management
+
+        Raises:
+            RuntimeError: If kernel is already running
+        """
+        if self._state != KernelState.INITIALIZED:
+            raise RuntimeError(
+                f"Cannot set execution client in state {self._state.name}. "
+                "Must be INITIALIZED."
+            )
+        self._execution_client = client
+        logger.info("ExecutionClient set: %s", client.name)
+
+    def set_clients(
+        self,
+        data_client: DataClient,
+        execution_client: ExecutionClient,
+    ) -> None:
+        """
+        Set both data and execution clients at once.
+
+        Convenience method for setting both clients together.
+
+        Args:
+            data_client: DataClient for market data
+            execution_client: ExecutionClient for order execution
+
+        Raises:
+            RuntimeError: If kernel is already running
+        """
+        self.set_data_client(data_client)
+        self.set_execution_client(execution_client)
 
     def add_actor(self, actor: BaseActor) -> None:
         """
@@ -508,11 +580,21 @@ class TradingKernel:
             logger.debug("Initializing RiskManager...")
             # RiskManager doesn't have async start, just ensure it's ready
 
-        # 5. Gateway connection (if set)
+        # 5. Gateway connection (if set) - legacy
         if self._gateway is not None:
             logger.debug("Connecting Gateway...")
             if hasattr(self._gateway, "connect"):
                 await self._gateway.connect()
+
+        # 5b. DataClient connection (if set)
+        if self._data_client is not None:
+            logger.debug("Connecting DataClient: %s", self._data_client.name)
+            await self._data_client.connect()
+
+        # 5c. ExecutionClient connection (if set)
+        if self._execution_client is not None:
+            logger.debug("Connecting ExecutionClient: %s", self._execution_client.name)
+            await self._execution_client.connect()
 
         # 6. Initialize and start Actors
         for actor in self._actors:
@@ -617,7 +699,7 @@ class TradingKernel:
             except Exception:
                 logger.exception("Error stopping actor: %s", actor.name)
 
-        # 3. Disconnect Gateway
+        # 3. Disconnect Gateway (legacy)
         if self._gateway is not None:
             logger.debug("Disconnecting Gateway...")
             try:
@@ -625,6 +707,22 @@ class TradingKernel:
                     await self._gateway.disconnect()
             except Exception:
                 logger.exception("Error disconnecting gateway")
+
+        # 3b. Disconnect ExecutionClient
+        if self._execution_client is not None:
+            logger.debug("Disconnecting ExecutionClient: %s", self._execution_client.name)
+            try:
+                await self._execution_client.disconnect()
+            except Exception:
+                logger.exception("Error disconnecting execution client")
+
+        # 3c. Disconnect DataClient
+        if self._data_client is not None:
+            logger.debug("Disconnecting DataClient: %s", self._data_client.name)
+            try:
+                await self._data_client.disconnect()
+            except Exception:
+                logger.exception("Error disconnecting data client")
 
         # 4. Stop Clock
         logger.debug("Stopping Clock...")
