@@ -8,6 +8,7 @@ This module provides the core messaging infrastructure:
 - MessageBus: Async priority-based message bus
 - Cache: Shared state cache for orders, positions, market data
 - Clock: Time and scheduling utilities
+- TradingKernel: Central orchestrator for all components
 """
 
 from libra.core.cache import Cache
@@ -20,6 +21,7 @@ from libra.core.events import (
     decode_event,
     encode_event,
 )
+from libra.core.kernel import KernelConfig, KernelState, TradingKernel
 from libra.core.message_bus import (
     EventFilter,
     Handler,
@@ -38,10 +40,13 @@ __all__ = [
     "EventFilter",
     "EventType",
     "Handler",
+    "KernelConfig",
+    "KernelState",
     "MessageBus",
     "MessageBusConfig",
     "Priority",
     "Subscription",
+    "TradingKernel",
     "decode_event",
     "encode_event",
 ]
