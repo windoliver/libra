@@ -41,14 +41,20 @@ exchange = [
     "ccxt>=4.0",
 ]
 
-# Future: TUI
+# TUI - Terminal User Interface (v4.0+ required for Markdown streaming)
 tui = [
-    "textual>=0.50",
+    "textual>=7.0.0",  # v7.0 adds atom-one themes, v6.0 adds TextArea suggestions
 ]
 
 # Future: validation (only at API boundaries)
 validation = [
     "pydantic>=2.0",
+]
+
+# Database - QuestDB time-series database (Issue #21)
+database = [
+    "questdb>=3.0",      # QuestDB Python client (ILP ingestion)
+    "asyncpg>=0.29",     # Async PostgreSQL driver (queries via PGWire)
 ]
 
 [project.scripts]
@@ -194,6 +200,8 @@ module = [
     "orjson.*",
     "uvloop.*",
     "polars.*",
+    "questdb.*",
+    "asyncpg.*",
 ]
 ignore_missing_imports = true
 

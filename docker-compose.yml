@@ -1,0 +1,51 @@
+###############################################################################
+# LIBRA Trading Platform - Docker Compose
+#
+# Services:
+#   - questdb: Time-series database for tick/OHLCV data
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose down           # Stop all services
+#   docker compose logs -f        # View logs
+#
+# Ports:
+#   - 9000: QuestDB Web Console (http://localhost:9000)
+#   - 9009: QuestDB ILP (high-throughput ingestion)
+#   - 8812: QuestDB PostgreSQL (queries)
+#
+###############################################################################
+
+services:
+  questdb:
+    image: questdb/questdb:8.2.1
+    container_name: libra-questdb
+    hostname: questdb
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # Web console & HTTP API
+      - "9009:9009"   # ILP ingestion (TCP)
+      - "8812:8812"   # PostgreSQL wire protocol
+    volumes:
+      - questdb-data:/var/lib/questdb
+    environment:
+      # PostgreSQL authentication
+      - QDB_PG_USER=libra
+      - QDB_PG_PASSWORD=libra
+      - QDB_PG_READONLY_USER_ENABLED=false
+      # Performance tuning
+      - QDB_CAIRO_COMMIT_LAG=1000        # Commit lag in ms
+      - QDB_CAIRO_MAX_UNCOMMITTED_ROWS=500000
+      - QDB_LINE_TCP_MAINTENANCE_JOB_INTERVAL=1000
+      # Memory settings (adjust based on your system)
+      - QDB_SHARED_WORKER_COUNT=2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/exec?query=SELECT%201"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  questdb-data:
+    driver: local
