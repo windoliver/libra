@@ -441,15 +441,15 @@ Integrate Freqtrade strategies and build usable backtesting.
 
 ```
 Task 2.1.1: Freqtrade Plugin Structure
-├── Files: src/aquarius/plugins/freqtrade_adapter/
+├── Files: src/libra/plugins/freqtrade_adapter/
 ├── Subtasks:
 │   ├── [ ] Create plugin package structure
-│   ├── [ ] Implement NexusPlugin base
+│   ├── [ ] Implement StrategyPlugin base class
 │   ├── [ ] Define plugin metadata
-│   ├── [ ] Register with Nexus
+│   ├── [ ] Register via entry_points in pyproject.toml
 │   └── [ ] Configuration schema
 ├── Acceptance Criteria:
-│   ├── Plugin loads in Nexus
+│   ├── Plugin discoverable via discover_strategies()
 │   ├── Commands registered
 │   └── Config validated
 └── Estimated Effort: 4 hours
@@ -657,19 +657,19 @@ Task 3.1.2: LangGraph Workflow
 │   └── <30s for full analysis
 └── Estimated Effort: 16 hours
 
-Task 3.1.3: Agent Registration with Nexus
-├── File: src/aquarius/agents/registration.py
+Task 3.1.3: Agent Registry
+├── File: src/libra/agents/registry.py
 ├── Dependencies: Task 3.1.1
 ├── Subtasks:
-│   ├── [ ] Register agents with Nexus entity registry
-│   ├── [ ] Set up permissions
-│   ├── [ ] Configure skills per agent
-│   └── [ ] Agent authentication
+│   ├── [ ] Create simple AgentRegistry dataclass
+│   ├── [ ] Register agent definitions
+│   ├── [ ] Set up role-based permissions
+│   └── [ ] Configure skills per agent
 ├── Acceptance Criteria:
 │   ├── Agents registered correctly
 │   ├── Permissions enforced
 │   └── Skills work
-└── Estimated Effort: 6 hours
+└── Estimated Effort: 4 hours
 ```
 
 ### 3.2 Deep Research Agent

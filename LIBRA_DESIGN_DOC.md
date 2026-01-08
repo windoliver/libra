@@ -240,7 +240,7 @@ LIBRA uses standard Python frameworks instead of custom infrastructure (see ADR-
 | **Performance-Critical** | Rust (via PyO3) | Hot paths like order matching, indicator calc |
 | **Message Bus** | In-process async + Redis Pub/Sub | Low latency for single node, scale with Redis |
 | **Database** | QuestDB (time-series) + PostgreSQL (relational) | Financial data needs specialized TSDB |
-| **Agent Framework** | LangGraph | Proven multi-agent orchestration, integrates with Nexus |
+| **Agent Framework** | LangGraph | Proven multi-agent orchestration |
 | **TUI Framework** | Textual | Modern Python TUI, async-native |
 
 ### 3.3 Hybrid Rust/Python Architecture (ADR-001)
