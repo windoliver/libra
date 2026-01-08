@@ -39,6 +39,7 @@ from textual.widgets import (
     TabPane,
 )
 
+from libra.tui.demo_trader import DemoTrader, TradingState as DemoTradingState
 from libra.tui.screens import HelpScreen, OrderEntryResult, OrderEntryScreen
 from libra.tui.widgets import (
     BalanceDisplay,
@@ -200,7 +201,10 @@ class LibraApp(App):
         self.gateway = gateway
         self.demo_mode = demo_mode
 
-        # Demo state (prices used by positions)
+        # Demo trading engine
+        self.demo_trader = DemoTrader()
+
+        # Legacy price references (for backward compatibility)
         self._btc_price = Decimal("51250.00")
         self._eth_price = Decimal("3045.00")
         self._sol_price = Decimal("142.50")
@@ -305,26 +309,31 @@ class LibraApp(App):
 
     def _setup_demo_mode(self) -> None:
         """Initialize demo with simulated data."""
-        self.query_one(StatusBar).set_status(connected=True, gateway_name="Paper Trading")
-        self.query_one(BalanceDisplay).set_demo_data()
+        self.query_one(StatusBar).set_status(connected=True, gateway_name="Paper Trading (Demo)")
+        self._sync_balance_from_demo()
         self._update_positions()
 
         log = self.query_one(LogViewer)
         log.log_message("LIBRA Trading Terminal v0.1.0", "success")
-        log.log_message("Press ? for help, / to type commands", "info")
+        log.log_message("Demo Mode: Realistic trading simulation", "info")
+        log.log_message("Press ? for help, o to place orders", "info")
+
+        # Setup demo trader callbacks
+        self.demo_trader.on_trade = self._on_demo_trade
+        self.demo_trader.on_risk_event = self._on_demo_risk_event
 
         self._throttled_notify(
-            "Connected to Paper Trading",
+            "Demo Mode Active - Trade with simulated funds",
             title="Welcome to LIBRA",
             severity="information",
             timeout=3,
         )
 
-        self.set_interval(1.0, self._simulate_tick)
-        self.set_interval(4.0, self._simulate_event)
+        # Timers for simulation
+        self.set_interval(0.5, self._simulate_tick)  # Faster price updates
         self.set_interval(2.0, self._update_positions)
-        self.set_interval(8.0, self._simulate_risk_event)
-        self.set_interval(3.0, self._update_risk_dashboard)
+        self.set_interval(1.0, self._update_risk_dashboard)
+        self.set_interval(5.0, self._maybe_auto_trade)  # Auto trades every 5s
 
     def _setup_live_mode(self) -> None:
         """Setup for live trading mode."""
@@ -455,22 +464,43 @@ class LibraApp(App):
                 self.query_one(LogViewer).log_message("Order cancelled", "debug")
                 return
 
-            # Log the order
             log = self.query_one(LogViewer)
-            log.log_message(
-                f"{ICON_UP if result.side == 'BUY' else ICON_DOWN} ORDER {result.side} "
-                f"{result.quantity} {result.symbol} @ "
-                f"{'MARKET' if result.order_type == 'MARKET' else f'${result.price:,.2f}'}",
-                "success",
-            )
 
-            # Show notification
-            self._throttled_notify(
-                f"{result.side} {result.quantity} {result.symbol}",
-                title="Order Submitted",
-                severity="information",
-                timeout=3,
-            )
+            # Execute via DemoTrader if in demo mode
+            if self.demo_mode:
+                success, msg = self.demo_trader.execute_order(
+                    symbol=result.symbol,
+                    side=result.side,
+                    quantity=result.quantity,
+                    price=result.price,
+                )
+
+                if success:
+                    icon = ICON_UP if result.side == "BUY" else ICON_DOWN
+                    log.log_message(f"{icon} {msg}", "success")
+                    self._throttled_notify(
+                        f"{result.side} {result.quantity} {result.symbol}",
+                        title="Order Executed",
+                        severity="information",
+                        timeout=3,
+                    )
+                else:
+                    log.log_message(f"ORDER REJECTED: {msg}", "error")
+                    self._throttled_notify(msg, title="Order Rejected", severity="error", timeout=5)
+            else:
+                # Live mode - just log (would send to gateway)
+                log.log_message(
+                    f"{ICON_UP if result.side == 'BUY' else ICON_DOWN} ORDER {result.side} "
+                    f"{result.quantity} {result.symbol} @ "
+                    f"{'MARKET' if result.order_type == 'MARKET' else f'${result.price:,.2f}'}",
+                    "success",
+                )
+                self._throttled_notify(
+                    f"{result.side} {result.quantity} {result.symbol}",
+                    title="Order Submitted",
+                    severity="information",
+                    timeout=3,
+                )
 
         self.push_screen(
             OrderEntryScreen(
@@ -580,70 +610,141 @@ class LibraApp(App):
 
         self._total_pnl = total_pnl
 
+    # =========================================================================
+    # Demo Trading Integration
+    # =========================================================================
+
+    def _sync_balance_from_demo(self) -> None:
+        """Sync balance display from demo trader."""
+        try:
+            stats = self.demo_trader.get_stats()
+            balance_display = self.query_one(BalanceDisplay)
+            table = balance_display.query_one(DataTable)
+            table.clear()
+
+            # Show USDT balance
+            equity = stats["equity"]
+            available = stats["balance"]
+            in_use = stats["total_exposure"]
+            pct_used = float(in_use / equity * 100) if equity > 0 else 0
+
+            pct_color = "green" if pct_used < 50 else "yellow" if pct_used < 80 else "red"
+            table.add_row(
+                "USDT",
+                f"{equity:,.2f}",
+                f"{available:,.2f}",
+                f"{in_use:,.2f}",
+                f"[{pct_color}]{pct_used:.1f}%[/{pct_color}]",
+            )
+        except Exception:
+            pass
+
+    def _on_demo_trade(self, message: str) -> None:
+        """Callback when demo trader executes a trade."""
+        log = self.query_one(LogViewer)
+        icon = ICON_UP if "BUY" in message else ICON_DOWN
+        log.log_message(f"{icon} {message}", "success")
+
+    def _on_demo_risk_event(self, state: str, reason: str) -> None:
+        """Callback when demo trader triggers risk event."""
+        log = self.query_one(LogViewer)
+        log.log_message(f"⚠ RISK STATE: {state} - {reason}", "warning")
+        self._throttled_notify(reason, title=f"Risk: {state}", severity="warning", timeout=5)
+
     def _simulate_tick(self) -> None:
-        """Simulate price updates."""
+        """Simulate price updates using DemoTrader."""
         self._tick_count += 1
+
+        # Update prices via demo trader
+        price_updates = self.demo_trader.tick_prices()
+
+        # Sync to legacy price vars for compatibility
+        self._btc_price = price_updates.get("BTC/USDT", self._btc_price)
+        self._eth_price = price_updates.get("ETH/USDT", self._eth_price)
+        self._sol_price = price_updates.get("SOL/USDT", self._sol_price)
+
+        # Log price tick occasionally
+        if self._tick_count % 4 == 0:
+            log = self.query_one(LogViewer)
+            symbols = [("BTC", self._btc_price), ("ETH", self._eth_price), ("SOL", self._sol_price)]
+            sym, price = symbols[self._tick_count % 3]
+            log.log_message(f"TICK {sym}/USDT @ ${price:,.2f}", "debug")
+
+        # Update P&L display
+        stats = self.demo_trader.get_stats()
+        self._total_pnl = stats["realized_pnl"] + stats["unrealized_pnl"]
+
+        try:
+            pnl_display = self.query_one(PnLDisplay)
+            pnl_display.update_pnl(self._total_pnl)
+        except Exception:
+            pass
+
+    def _maybe_auto_trade(self) -> None:
+        """Occasionally execute auto trades for demo."""
+        if self.demo_trader.trading_state != DemoTradingState.ACTIVE:
+            return
+
         log = self.query_one(LogViewer)
 
-        self._btc_price += Decimal(str(random.uniform(-150, 150)))  # noqa: S311
-        self._btc_price = max(Decimal("48000"), min(Decimal("54000"), self._btc_price))
+        # Pick random symbol
+        symbol = random.choice(["BTC/USDT", "ETH/USDT", "SOL/USDT"])  # noqa: S311
 
-        self._eth_price += Decimal(str(random.uniform(-25, 25)))  # noqa: S311
-        self._eth_price = max(Decimal("2800"), min(Decimal("3200"), self._eth_price))
+        # Smart side selection: if we have a position, 50% chance to close it
+        position = self.demo_trader.positions.get(symbol)
+        if position and position.side != "FLAT" and random.random() > 0.5:  # noqa: S311
+            # Close existing position
+            side = "SELL" if position.side == "LONG" else "BUY"
+            quantity = position.quantity
+        else:
+            # Open new position (BUY only to avoid short-selling complexity)
+            side = "BUY"
+            qty_map = {"BTC/USDT": "0.02", "ETH/USDT": "0.1", "SOL/USDT": "1.0"}
+            quantity = Decimal(qty_map[symbol]) * Decimal(str(random.uniform(0.5, 1.5)))  # noqa: S311
 
-        self._sol_price += Decimal(str(random.uniform(-3, 3)))  # noqa: S311
-        self._sol_price = max(Decimal("130"), min(Decimal("155"), self._sol_price))
+        # Execute
+        success, msg = self.demo_trader.execute_order(symbol, side, quantity)
 
-        symbols = [("BTC", self._btc_price), ("ETH", self._eth_price), ("SOL", self._sol_price)]
-        sym, price = symbols[self._tick_count % 3]
-        log.log_message(f"TICK {sym}/USDT @ ${price:,.2f}", "debug")
-
-    def _simulate_event(self) -> None:
-        """Simulate trading events."""
-        log = self.query_one(LogViewer)
-        events = [
-            (f"{ICON_UP} SIGNAL BUY BTC/USDT confidence=0.82", "info"),
-            (f"{ICON_DOWN} SIGNAL SELL ETH/USDT confidence=0.71", "info"),
-            (f"{ICON_UP} ORDER FILLED BUY 0.05 BTC @ $51,100", "success"),
-            (f"{ICON_DOWN} ORDER FILLED SELL 1.0 ETH @ $3,020", "success"),
-            (f"{ICON_NEUTRAL} SIGNAL HOLD SOL/USDT confidence=0.45", "debug"),
-        ]
-        event, level = random.choice(events)  # noqa: S311
-        log.log_message(event, level)
-
-    def _simulate_risk_event(self) -> None:
-        """Simulate risk alerts with throttling."""
-        if random.random() > 0.6:  # noqa: S311
-            events = [
-                "Position limit 85% utilized",
-                "Daily loss -1.2% | threshold -3.0%",
-                "Drawdown -2.1% from peak",
-            ]
-            msg = random.choice(events)  # noqa: S311
-            self.query_one(LogViewer).log_message(f"⚠ RISK {msg}", "warning")
-            self._throttled_notify(msg, title="Risk Alert", severity="warning", timeout=5)
+        if success:
+            icon = ICON_UP if side == "BUY" else ICON_DOWN
+            log.log_message(f"{icon} AUTO {msg}", "info")
+        else:
+            log.log_message(f"{ICON_NEUTRAL} AUTO blocked: {msg}", "debug")
 
     def _update_risk_dashboard(self) -> None:
-        """Update risk dashboard with simulated data."""
+        """Update risk dashboard from DemoTrader state."""
         try:
             dashboard = self.query_one("#risk-dashboard", RiskDashboard)
+            stats = self.demo_trader.get_stats()
 
-            # Simulate changing values
-            drawdown = random.uniform(1.0, 8.0)  # noqa: S311
-            daily_pnl = random.uniform(-3000, 1000)  # noqa: S311
-            order_rate = random.randint(1, 5)  # noqa: S311
+            # Trading state
+            dashboard.set_trading_state(stats["trading_state"])
 
-            dashboard.set_trading_state("ACTIVE")
-            dashboard.set_drawdown(drawdown, 10.0)
-            dashboard.set_daily_pnl(daily_pnl, 10000)
-            dashboard.set_order_rate(order_rate, 10)
+            # Drawdown
+            dashboard.set_drawdown(stats["drawdown_pct"], self.demo_trader.max_drawdown_pct)
 
-            # Simulate position exposures
-            dashboard.set_exposure("BTC/USDT", random.uniform(40, 80), 100)  # noqa: S311
-            dashboard.set_exposure("ETH/USDT", random.uniform(20, 50), 75)  # noqa: S311
-            dashboard.set_exposure("SOL/USDT", random.uniform(10, 30), 50)  # noqa: S311
+            # Daily P&L
+            daily_pnl = float(stats["daily_pnl"])
+            daily_limit = float(self.demo_trader.daily_loss_limit)
+            dashboard.set_daily_pnl(daily_pnl, daily_limit)
 
-            dashboard.set_circuit_breaker("CLOSED")
+            # Order rate
+            dashboard.set_order_rate(
+                self.demo_trader.orders_this_second,
+                self.demo_trader.order_rate_limit,
+            )
+            self.demo_trader.orders_this_second = 0  # Reset per-second counter
+
+            # Position exposures
+            for symbol in ["BTC/USDT", "ETH/USDT", "SOL/USDT"]:
+                current, limit = self.demo_trader.get_position_exposure(symbol)
+                dashboard.set_exposure(symbol, current, limit)
+
+            # Circuit breaker
+            dashboard.set_circuit_breaker(stats["circuit_breaker"])
+
+            # Also sync balance
+            self._sync_balance_from_demo()
         except Exception:
             pass
 
