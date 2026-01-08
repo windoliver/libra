@@ -20,6 +20,7 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -32,9 +33,10 @@ from libra.strategies.actor import BaseActor, ComponentState
 
 
 if TYPE_CHECKING:
-    from libra.clients.data_client import DataClient
+    from libra.clients.data_client import DataClient, Instrument
     from libra.clients.execution_client import ExecutionClient
-    from libra.gateways.protocol import Gateway
+    from libra.gateways.protocol import Gateway, Order, OrderResult
+    from libra.risk.engine import RiskEngine
     from libra.risk.manager import RiskManager
     from libra.strategies.strategy import BaseStrategy
 
@@ -196,7 +198,8 @@ class TradingKernel:
 
         # Optional components (set by user)
         self._gateway: Gateway | None = None
-        self._risk_manager: RiskManager | None = None
+        self._risk_manager: RiskManager | None = None  # Legacy
+        self._risk_engine: RiskEngine | None = None  # New (Issue #34)
 
         # New client architecture (Issue #33)
         self._data_client: DataClient | None = None
@@ -275,8 +278,13 @@ class TradingKernel:
 
     @property
     def risk_manager(self) -> RiskManager | None:
-        """Risk manager (if set)."""
+        """Risk manager (if set) - legacy, prefer risk_engine."""
         return self._risk_manager
+
+    @property
+    def risk_engine(self) -> RiskEngine | None:
+        """Risk engine for pre-trade validation (if set)."""
+        return self._risk_engine
 
     @property
     def data_client(self) -> DataClient | None:
@@ -331,7 +339,9 @@ class TradingKernel:
 
     def set_risk_manager(self, risk_manager: RiskManager) -> None:
         """
-        Set the risk manager.
+        Set the risk manager (legacy).
+
+        Prefer set_risk_engine() for new code.
 
         Args:
             risk_manager: Risk manager for pre-trade validation
@@ -345,7 +355,31 @@ class TradingKernel:
                 "Must be INITIALIZED."
             )
         self._risk_manager = risk_manager
-        logger.info("RiskManager set")
+        logger.info("RiskManager set (legacy)")
+
+    def set_risk_engine(self, risk_engine: RiskEngine) -> None:
+        """
+        Set the risk engine for pre-trade validation.
+
+        All orders submitted through submit_order() will be validated
+        by the risk engine before being sent to the execution client.
+
+        Args:
+            risk_engine: RiskEngine for pre-trade validation
+
+        Raises:
+            RuntimeError: If kernel is already running
+        """
+        if self._state != KernelState.INITIALIZED:
+            raise RuntimeError(
+                f"Cannot set risk engine in state {self._state.name}. "
+                "Must be INITIALIZED."
+            )
+        self._risk_engine = risk_engine
+        # Wire up message bus for event publishing
+        if risk_engine.bus is None:
+            risk_engine.bus = self._bus
+        logger.info("RiskEngine set")
 
     def set_data_client(self, client: DataClient) -> None:
         """
@@ -894,6 +928,199 @@ class TradingKernel:
                 return False
 
         return True
+
+    # =========================================================================
+    # Order Submission (with Risk Validation)
+    # =========================================================================
+
+    async def submit_order(
+        self,
+        order: Order,
+        current_price: Decimal,
+        instrument: Instrument | None = None,
+    ) -> OrderResult:
+        """
+        Submit an order with mandatory risk validation.
+
+        This is the RECOMMENDED way to submit orders. It ensures:
+        1. Risk engine validation (if configured)
+        2. Order submission to execution client
+        3. Open order tracking for self-trade prevention
+
+        Args:
+            order: Order to submit
+            current_price: Current market price (for risk checks)
+            instrument: Optional instrument (for precision validation)
+
+        Returns:
+            OrderResult from execution client
+
+        Raises:
+            RuntimeError: If kernel is not running or execution client not set
+            OrderDeniedException: If order fails risk validation
+        """
+        from decimal import Decimal as Dec
+
+        if self._state != KernelState.RUNNING:
+            raise RuntimeError(
+                f"Cannot submit orders in state {self._state.name}. "
+                "Kernel must be RUNNING."
+            )
+
+        if self._execution_client is None:
+            raise RuntimeError("ExecutionClient not set. Cannot submit orders.")
+
+        # Risk validation (mandatory if engine is set)
+        if self._risk_engine is not None:
+            result = self._risk_engine.validate_order(
+                order, current_price, instrument
+            )
+            if not result.passed:
+                # Create a denied order result
+                from libra.gateways.protocol import OrderResult, OrderStatus
+
+                logger.warning(
+                    "Order DENIED by RiskEngine: %s - %s",
+                    result.check_name,
+                    result.reason,
+                )
+
+                return OrderResult(
+                    order_id="",
+                    symbol=order.symbol,
+                    status=OrderStatus.REJECTED,
+                    side=order.side,
+                    order_type=order.order_type,
+                    amount=order.amount,
+                    filled_amount=Dec("0"),
+                    remaining_amount=order.amount,
+                    average_price=None,
+                    fee=Dec("0"),
+                    fee_currency="",
+                    timestamp_ns=time.time_ns(),
+                    client_order_id=order.client_order_id,
+                    price=order.price,
+                    stop_price=order.stop_price,
+                )
+
+        # Submit to execution client
+        order_result = await self._execution_client.submit_order(order)
+
+        # Track open order for self-trade prevention
+        if self._risk_engine is not None and order_result.is_open:
+            self._risk_engine.add_open_order(order)
+
+        return order_result
+
+    async def cancel_order(
+        self,
+        order_id: str,
+        symbol: str,
+    ) -> bool:
+        """
+        Cancel an order and update risk engine tracking.
+
+        Args:
+            order_id: Order ID to cancel
+            symbol: Order symbol
+
+        Returns:
+            True if cancellation was successful
+
+        Raises:
+            RuntimeError: If kernel is not running or execution client not set
+        """
+        if self._state != KernelState.RUNNING:
+            raise RuntimeError(
+                f"Cannot cancel orders in state {self._state.name}. "
+                "Kernel must be RUNNING."
+            )
+
+        if self._execution_client is None:
+            raise RuntimeError("ExecutionClient not set. Cannot cancel orders.")
+
+        success = await self._execution_client.cancel_order(order_id, symbol)
+
+        # Remove from open order tracking
+        if success and self._risk_engine is not None:
+            self._risk_engine.remove_open_order(symbol, order_id=order_id)
+
+        return success
+
+    async def modify_order(
+        self,
+        order_id: str,
+        symbol: str,
+        price: Decimal | None = None,
+        amount: Decimal | None = None,
+        current_price: Decimal | None = None,
+        instrument: Instrument | None = None,
+    ) -> OrderResult:
+        """
+        Modify an order with risk validation.
+
+        Args:
+            order_id: Order ID to modify
+            symbol: Order symbol
+            price: New price (if changing)
+            amount: New amount (if changing)
+            current_price: Current market price (for collar check)
+            instrument: Instrument (for precision validation)
+
+        Returns:
+            OrderResult with updated order state
+
+        Raises:
+            RuntimeError: If kernel is not running or execution client not set
+        """
+        from decimal import Decimal as Dec
+
+        if self._state != KernelState.RUNNING:
+            raise RuntimeError(
+                f"Cannot modify orders in state {self._state.name}. "
+                "Kernel must be RUNNING."
+            )
+
+        if self._execution_client is None:
+            raise RuntimeError("ExecutionClient not set. Cannot modify orders.")
+
+        # Risk validation for modifications
+        if self._risk_engine is not None:
+            result = self._risk_engine.validate_modify(
+                order_id,
+                new_price=price,
+                new_amount=amount,
+                current_price=current_price,
+                instrument=instrument,
+            )
+            if not result.passed:
+                from libra.gateways.protocol import OrderResult, OrderStatus, OrderSide, OrderType
+
+                logger.warning(
+                    "Order modification DENIED by RiskEngine: %s - %s",
+                    result.check_name,
+                    result.reason,
+                )
+
+                return OrderResult(
+                    order_id=order_id,
+                    symbol=symbol,
+                    status=OrderStatus.REJECTED,
+                    side=OrderSide.BUY,  # Unknown, placeholder
+                    order_type=OrderType.LIMIT,  # Unknown, placeholder
+                    amount=amount or Dec("0"),
+                    filled_amount=Dec("0"),
+                    remaining_amount=amount or Dec("0"),
+                    average_price=None,
+                    fee=Dec("0"),
+                    fee_currency="",
+                    timestamp_ns=time.time_ns(),
+                    price=price,
+                )
+
+        return await self._execution_client.modify_order(
+            order_id, symbol, price, amount
+        )
 
     # =========================================================================
     # Context Manager

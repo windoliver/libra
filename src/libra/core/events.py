@@ -37,7 +37,8 @@ class EventType(Enum):
     ORDER_FILLED = auto()
     ORDER_PARTIALLY_FILLED = auto()  # Partial fill
     ORDER_CANCELLED = auto()
-    ORDER_REJECTED = auto()
+    ORDER_REJECTED = auto()  # Rejected by exchange
+    ORDER_DENIED = auto()  # Denied by RiskEngine (pre-trade validation)
     ORDER_MODIFIED = auto()  # Order modified
     ORDER_EXPIRED = auto()  # Order expired
 
@@ -96,6 +97,7 @@ EVENT_PRIORITY_MAP: dict[EventType, Priority] = {
     EventType.ORDER_PARTIALLY_FILLED: Priority.ORDERS,
     EventType.ORDER_CANCELLED: Priority.ORDERS,
     EventType.ORDER_REJECTED: Priority.ORDERS,
+    EventType.ORDER_DENIED: Priority.RISK,  # Risk denials are high priority
     EventType.ORDER_MODIFIED: Priority.ORDERS,
     EventType.ORDER_EXPIRED: Priority.ORDERS,
     EventType.POSITION_OPENED: Priority.ORDERS,

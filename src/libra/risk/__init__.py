@@ -3,34 +3,55 @@ LIBRA Risk: Risk management system.
 
 This module provides comprehensive risk management for trading:
 
-- RiskManager: Pre-trade validation engine (all orders must pass through)
+- RiskEngine: Pre-trade validation engine (all orders must pass through)
+- RiskEngineConfig: Complete engine configuration
 - RiskLimits: Configurable risk limits (YAML supported)
 - PositionSizer: Position sizing algorithms (Fixed%, ATR, Kelly)
 - CircuitBreaker: Automatic trading halt on risk events
 - TokenBucketRateLimiter: Order rate limiting
 
 Usage:
-    from libra.risk import RiskManager, RiskLimits
+    from libra.risk import RiskEngine, RiskEngineConfig, RiskLimits
 
-    # Load limits from config
-    limits = RiskLimits.from_yaml(Path("config/risk_limits.yaml"))
+    # Configure engine
+    config = RiskEngineConfig(
+        limits=RiskLimits.from_yaml(Path("config/risk_limits.yaml")),
+        enable_self_trade_prevention=True,
+        enable_price_collar=True,
+        price_collar_pct=Decimal("0.10"),  # 10%
+    )
 
-    # Create manager
-    manager = RiskManager(limits=limits, bus=message_bus)
+    # Create engine
+    engine = RiskEngine(config=config, bus=message_bus)
 
     # Validate every order before execution
-    result = manager.validate_order(order, current_price)
+    result = engine.validate_order(order, current_price, instrument)
     if not result.passed:
-        logger.warning("Order rejected: %s", result.reason)
+        logger.warning("Order denied: %s", result.reason)
         return
 
     # Order passed all checks
-    await gateway.submit_order(order)
+    await execution_client.submit_order(order)
 
 Architecture:
-    Strategy -> RiskManager.validate_order() -> ExecutionEngine -> Gateway
+    Strategy -> RiskEngine.validate_order() -> ExecutionEngine -> Gateway
 
-    ALL orders MUST pass through RiskManager. This is mandatory.
+    ALL orders MUST pass through RiskEngine. This is mandatory.
+
+Features:
+    - Trading state management (ACTIVE/REDUCING/HALTED)
+    - Position limit checks
+    - Notional value checks
+    - Order rate limiting (submit + modify)
+    - Drawdown monitoring
+    - Circuit breaker
+    - Self-trade prevention (wash trading)
+    - Price/quantity precision validation
+    - Price collar (fat-finger protection)
+
+References:
+    - NautilusTrader RiskEngine pattern
+    - FIA Best Practices for Automated Trading Risk Controls
 """
 
 from libra.risk.circuit_breaker import (
@@ -38,14 +59,18 @@ from libra.risk.circuit_breaker import (
     CircuitBreakerConfig,
     CircuitState,
 )
+from libra.risk.engine import (
+    RiskCheckResult,
+    RiskEngine,
+    RiskEngineConfig,
+    TradingState,
+)
 from libra.risk.limits import (
     RiskLimits,
     SymbolLimits,
 )
 from libra.risk.manager import (
-    RiskCheckResult,
-    RiskManager,
-    TradingState,
+    RiskManager,  # Backward compatibility alias
 )
 from libra.risk.position_sizing import (
     FixedPercentageSizer,
@@ -63,10 +88,13 @@ from libra.risk.rate_limiter import (
 
 
 __all__ = [
-    # Manager
-    "RiskManager",
+    # Engine (new)
+    "RiskEngine",
+    "RiskEngineConfig",
     "RiskCheckResult",
     "TradingState",
+    # Manager (backward compatibility)
+    "RiskManager",
     # Limits
     "RiskLimits",
     "SymbolLimits",
