@@ -44,14 +44,14 @@ Aquarius is a unified, AI-powered trading platform that democratizes institution
 | User Interface | Web/Mobile | Terminal TUI (power users) |
 | Execution | Paper or single broker | Unified real-money multi-broker |
 
-### 1.3 Built on Nexus
+### 1.3 Core Infrastructure
 
-Aquarius leverages the existing Nexus infrastructure:
-- **Plugin System** (`nexus.plugins`) → Strategy adapters
-- **Agent System** (`nexus.core.agents`) → Trading agents
-- **LangGraph Integration** (`nexus.tools.langgraph`) → Multi-agent orchestration
-- **Storage** (`nexus.core.nexus_fs`) → Strategies, configs, results
-- **Permissions** (`nexus.core.rebac`) → Agent access control
+LIBRA uses standard Python frameworks instead of custom infrastructure (see ADR-007):
+- **Plugin System** (`importlib` + `entry_points`) → Strategy adapters
+- **Agent System** (LangGraph directly) → Trading agents
+- **Multi-Agent Orchestration** (LangGraph) → Agent workflows
+- **Storage** (Local filesystem + QuestDB) → Strategies, configs, results
+- **Permissions** (Simple role-based checks) → Agent access control
 
 ---
 
@@ -146,7 +146,7 @@ Aquarius leverages the existing Nexus infrastructure:
 │                                      │                                          │
 │  ┌───────────────────────────────────┼───────────────────────────────────────┐  │
 │  │                     STRATEGY PLUGIN LAYER                                 │  │
-│  │                   (Nexus Plugin Architecture)                             │  │
+│  │                   (Entry Points + importlib)                             │  │
 │  │                                                                           │  │
 │  │   ┌─────────────────────────────────────────────────────────────────┐    │  │
 │  │   │                  UNIFIED STRATEGY PROTOCOL                      │    │  │
@@ -216,9 +216,9 @@ Aquarius leverages the existing Nexus infrastructure:
 │  └───────────────────────────────────────────────────────────────────────────┘  │
 │                                      │                                          │
 │  ┌───────────────────────────────────┼───────────────────────────────────────┐  │
-│  │                    STORAGE LAYER (NexusFS)                                │  │
+│  │                    STORAGE LAYER (~/.libra/)                              │  │
 │  │                                                                           │  │
-│  │   /aquarius/                                                              │  │
+│  │   ~/.libra/                                                              │  │
 │  │   ├── strategies/           # Strategy code & configs                    │  │
 │  │   │   ├── freqtrade/                                                     │  │
 │  │   │   ├── hummingbot/                                                    │  │
@@ -927,33 +927,43 @@ class RiskManager:
 
 ### 5.1 Framework Adapters
 
-Each external framework becomes a Nexus plugin implementing the Strategy protocol.
+Each external framework becomes a plugin implementing the Strategy protocol, discoverable via entry_points.
 
 #### 5.1.1 Freqtrade Adapter
 
 ```python
-# aquarius/plugins/freqtrade_adapter/plugin.py
+# libra/plugins/freqtrade_adapter/plugin.py
 
-from nexus.plugins.base import NexusPlugin, PluginMetadata
-from aquarius.strategies.protocol import Strategy, Signal, BacktestResult
+from dataclasses import dataclass
+from libra.strategies.protocol import Strategy, Signal, BacktestResult
 import pandas as pd
 
-class FreqtradeAdapter(NexusPlugin, Strategy):
+@dataclass
+class PluginMetadata:
+    """Plugin metadata for discovery."""
+    name: str
+    version: str
+    description: str
+    author: str
+    requires: list[str]
+
+class FreqtradeAdapter(Strategy):
     """
     Adapter for Freqtrade strategies.
 
-    Enables running any Freqtrade strategy in Aquarius:
+    Enables running any Freqtrade strategy in LIBRA:
     - Import existing strategies
     - Use FreqAI for ML
     - Access hyperopt optimization
     """
 
-    def metadata(self) -> PluginMetadata:
+    @classmethod
+    def metadata(cls) -> PluginMetadata:
         return PluginMetadata(
             name="freqtrade-adapter",
             version="0.1.0",
-            description="Run Freqtrade strategies in Aquarius",
-            author="Aquarius",
+            description="Run Freqtrade strategies in LIBRA",
+            author="LIBRA",
             requires=["freqtrade>=2024.1"],
         )
 
@@ -1028,9 +1038,9 @@ class FreqtradeAdapter(NexusPlugin, Strategy):
 #### 5.1.2 Hummingbot Adapter
 
 ```python
-# aquarius/plugins/hummingbot_adapter/plugin.py
+# libra/plugins/hummingbot_adapter/plugin.py
 
-class HummingbotAdapter(NexusPlugin, Strategy):
+class HummingbotAdapter(Strategy):
     """
     Adapter for Hummingbot market making strategies.
 
@@ -1041,12 +1051,13 @@ class HummingbotAdapter(NexusPlugin, Strategy):
     - Arbitrage strategies
     """
 
-    def metadata(self) -> PluginMetadata:
+    @classmethod
+    def metadata(cls) -> PluginMetadata:
         return PluginMetadata(
             name="hummingbot-adapter",
             version="0.1.0",
-            description="Run Hummingbot strategies in Aquarius",
-            author="Aquarius",
+            description="Run Hummingbot strategies in LIBRA",
+            author="LIBRA",
             requires=["hummingbot>=2.0"],
         )
 
@@ -1465,39 +1476,37 @@ TRADING_AGENTS = {
 }
 ```
 
-### 7.2 Agent Registration with Nexus
+### 7.2 Agent Registry
 
 ```python
-# aquarius/agents/registration.py
+# libra/agents/registry.py
 
-from nexus.core.agents import register_agent
-from nexus.core.entity_registry import EntityRegistry
+from dataclasses import dataclass, field
 
-async def register_trading_agents(
-    user_id: str,
-    entity_registry: EntityRegistry,
-) -> dict[str, dict]:
-    """Register all trading agents for a user."""
+@dataclass
+class AgentRegistry:
+    """Simple registry for trading agents."""
 
-    registered = {}
+    agents: dict[str, AgentDefinition] = field(default_factory=dict)
 
-    for role, definition in TRADING_AGENTS.items():
-        agent = register_agent(
-            user_id=user_id,
-            agent_id=definition.id,
-            name=definition.display_name,
-            metadata={
-                "role": role.value,
-                "description": definition.description,
-                "model": definition.model,
-                "can_execute_trades": definition.can_execute_trades,
-                "skills": definition.skills,
-            },
-            entity_registry=entity_registry,
-        )
-        registered[role.value] = agent
+    def register(self, definition: AgentDefinition) -> None:
+        """Register an agent definition."""
+        self.agents[definition.id] = definition
 
-    return registered
+    def get(self, agent_id: str) -> AgentDefinition | None:
+        """Get agent by ID."""
+        return self.agents.get(agent_id)
+
+    def list_by_role(self, role: AgentRole) -> list[AgentDefinition]:
+        """List agents by role."""
+        return [a for a in self.agents.values() if a.role == role]
+
+def create_trading_agent_registry() -> AgentRegistry:
+    """Create registry with all trading agents."""
+    registry = AgentRegistry()
+    for definition in TRADING_AGENTS.values():
+        registry.register(definition)
+    return registry
 ```
 
 ---
@@ -1889,7 +1898,7 @@ aquarius/
 │   │   ├── __init__.py
 │   │   ├── definitions.py       # Agent type definitions
 │   │   ├── trading_agents.py    # TradingAgents integration
-│   │   ├── registration.py      # Nexus agent registration
+│   │   ├── registry.py          # Agent registry
 │   │   └── workflows/           # LangGraph workflows
 │   │
 │   ├── data/                    # Data management
@@ -1979,9 +1988,7 @@ dependencies = [
     # Database
     "sqlalchemy>=2.0",
     "asyncpg>=0.29",
-
-    # Nexus integration
-    "nexus-core>=0.5",
+    "questdb>=3.0",
 ]
 
 [project.optional-dependencies]
