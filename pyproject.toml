@@ -58,8 +58,20 @@ database = [
     "asyncpg>=0.29",     # Async PostgreSQL driver (queries via PGWire)
 ]
 
+# Freqtrade - Strategy adapter plugin (Issue #6 / Phase 2.1)
+freqtrade = [
+    "freqtrade>=2024.1",  # Freqtrade trading bot
+    "technical>=1.4",      # Freqtrade indicator library
+    "pandas>=2.0",         # Required for DataFrames
+    "pandas-ta>=0.3.14b",  # Additional technical indicators
+]
+
 [project.scripts]
 libra = "libra.cli:main"
+
+# Plugin entry points for strategy discovery (ADR-007)
+[project.entry-points."libra.strategies"]
+freqtrade = "libra.plugins.freqtrade_adapter:FreqtradeAdapter"
 
 [build-system]
 requires = ["hatchling"]
