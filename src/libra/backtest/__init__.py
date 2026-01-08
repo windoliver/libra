@@ -74,6 +74,7 @@ from libra.backtest.engine import (
     BacktestConfig,
     BacktestEngine,
 )
+from libra.backtest.gateway import BacktestGateway
 from libra.backtest.metrics import (
     MetricsCollector,
     TradeRecord,
@@ -88,6 +89,8 @@ __all__ = [
     # Engine
     "BacktestEngine",
     "BacktestConfig",
+    # Gateway (for unified strategies)
+    "BacktestGateway",
     # Metrics
     "MetricsCollector",
     "TradeRecord",

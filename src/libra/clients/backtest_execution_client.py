@@ -47,6 +47,7 @@ from libra.gateways.protocol import (
 
 if TYPE_CHECKING:
     from libra.core.clock import Clock
+    from libra.core.message_bus import MessageBus
 
 
 # =============================================================================
@@ -365,6 +366,7 @@ class BacktestExecutionClient(BaseExecutionClient):
         taker_fee: Decimal = Decimal("0.001"),  # 0.1%
         name: str = "backtest-exec",
         config: dict[str, Any] | None = None,
+        bus: MessageBus | None = None,
     ) -> None:
         """
         Initialize backtest execution client.
@@ -379,9 +381,11 @@ class BacktestExecutionClient(BaseExecutionClient):
             taker_fee: Taker fee rate (default 0.1%)
             name: Client identifier
             config: Optional configuration
+            bus: Optional message bus for publishing ORDER_FILLED events
         """
         super().__init__(name, config)
         self.clock = clock
+        self._bus = bus
 
         # Fee structure
         self.maker_fee = maker_fee
@@ -908,6 +912,26 @@ class BacktestExecutionClient(BaseExecutionClient):
         self._open_orders[result.order_id] = result
         self._order_history.append(result)
         await self._order_updates.put(result)
+
+        # Publish ORDER_FILLED event to message bus (for unified strategy support)
+        if self._bus is not None:
+            from libra.core.events import Event, EventType
+
+            event = Event.create(
+                event_type=EventType.ORDER_FILLED,
+                source="backtest_execution_client",
+                payload={
+                    "order_id": result.order_id,
+                    "symbol": result.symbol,
+                    "side": result.side.value,
+                    "filled_amount": str(result.filled_amount),
+                    "average_price": str(result.average_price),
+                    "fee": str(result.fee),
+                    "fee_currency": result.fee_currency,
+                    "timestamp_ns": result.timestamp_ns,
+                },
+            )
+            self._bus.publish(event)  # publish is synchronous
 
         return result
 

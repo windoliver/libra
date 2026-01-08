@@ -21,6 +21,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from libra.backtest.gateway import BacktestGateway
 from libra.backtest.metrics import MetricsCollector
 from libra.backtest.result import BacktestResult
 from libra.clients.backtest_data_client import BacktestDataClient, InMemoryDataSource
@@ -31,12 +32,18 @@ from libra.clients.backtest_execution_client import (
 from libra.core.clock import Clock, ClockType
 from libra.core.events import Event, EventType
 from libra.core.message_bus import MessageBus, MessageBusConfig
-from libra.strategies.base import BaseStrategy
+from libra.strategies.base import BaseStrategy as LegacyStrategy
 from libra.strategies.protocol import Bar
 
 
 if TYPE_CHECKING:
     from libra.risk.engine import RiskEngine
+
+# Import unified strategy for runtime check
+try:
+    from libra.strategies.strategy import BaseStrategy as UnifiedStrategy
+except ImportError:
+    UnifiedStrategy = None  # type: ignore[misc, assignment]
 
 
 logger = logging.getLogger(__name__)
@@ -150,8 +157,14 @@ class BacktestEngine:
         self._data_client: BacktestDataClient | None = None
         self._execution_client: BacktestExecutionClient | None = None
 
-        # Strategy
-        self._strategy: BaseStrategy | None = None
+        # Strategy (supports both legacy and unified)
+        # Legacy: from strategies.base (on_bar returns Signal)
+        # Unified: from strategies.strategy (async on_bar, uses gateway)
+        self._strategy: LegacyStrategy | Any | None = None
+        self._is_unified_strategy = False
+
+        # Gateway (for unified strategies)
+        self._gateway: BacktestGateway | None = None
 
         # Risk engine (optional)
         self._risk_engine: RiskEngine | None = None
@@ -178,9 +191,15 @@ class BacktestEngine:
     # Configuration
     # =========================================================================
 
-    def add_strategy(self, strategy: BaseStrategy) -> None:
+    def add_strategy(self, strategy: LegacyStrategy | Any) -> None:
         """
         Add a strategy to the backtest.
+
+        Supports two strategy types:
+        - Legacy: LegacyStrategy (from strategies.base) with on_bar() -> Signal
+        - Unified: UnifiedStrategy (from strategies.strategy) with async on_bar()
+
+        For unified strategies, a BacktestGateway is created automatically.
 
         Currently supports only one strategy per backtest.
         For multi-strategy testing, run multiple backtests.
@@ -195,8 +214,17 @@ class BacktestEngine:
             raise ValueError(
                 "Strategy already set. Create new engine for different strategy."
             )
+
+        # Detect strategy type
+        # Unified strategies have _gateway attribute (from BaseStrategy in strategy.py)
+        self._is_unified_strategy = hasattr(strategy, "_gateway")
+
         self._strategy = strategy
-        logger.info("Strategy added: %s", strategy.name)
+        logger.info(
+            "Strategy added: %s (unified=%s)",
+            strategy.name,
+            self._is_unified_strategy,
+        )
 
     def add_bars(self, symbol: str, bars: list[Bar]) -> None:
         """
@@ -307,13 +335,18 @@ class BacktestEngine:
 
     async def _initialize(self) -> None:
         """Initialize all components for the backtest."""
+        assert self._strategy is not None
+
         # Create data client
         symbol = next(iter(self._bars.keys()))
         bars = self._bars[symbol]
 
+        # Get timeframe from strategy (legacy has property, unified has config)
+        timeframe = getattr(self._strategy, "timeframe", "1h")
+
         # Create in-memory data source with bars
         data_source = InMemoryDataSource()
-        data_source.add_bars(symbol, self._strategy.timeframe, bars)
+        data_source.add_bars(symbol, timeframe, bars)
 
         self._data_client = BacktestDataClient(
             data_source=data_source,
@@ -325,6 +358,7 @@ class BacktestEngine:
         quote_currency = symbol.split("/")[1] if "/" in symbol else "USDT"
         initial_balance = {quote_currency: self.config.initial_capital}
 
+        # Pass message bus for unified strategies (ORDER_FILLED event publishing)
         self._execution_client = BacktestExecutionClient(
             clock=self._clock,
             initial_balance=initial_balance,
@@ -332,11 +366,22 @@ class BacktestEngine:
             slippage_bps=self.config.slippage_bps,
             maker_fee=self.config.maker_fee_rate,
             taker_fee=self.config.taker_fee_rate,
+            bus=self._bus if self._is_unified_strategy else None,
         )
 
         # Connect clients
         await self._data_client.connect()
         await self._execution_client.connect()
+
+        # Create BacktestGateway for unified strategies
+        if self._is_unified_strategy:
+            self._gateway = BacktestGateway(
+                execution_client=self._execution_client,
+                bus=self._bus,
+            )
+            await self._gateway.connect()
+            # Set gateway on unified strategy
+            self._strategy._gateway = self._gateway
 
         # Configure data range from the bars
         start_time = datetime.fromtimestamp(bars[0].timestamp_ns / 1_000_000_000)
@@ -346,7 +391,7 @@ class BacktestEngine:
         # Subscribe to bar data
         await self._data_client.subscribe_bars(
             symbol=symbol,
-            timeframe=self._strategy.timeframe,
+            timeframe=timeframe,
         )
 
         # Subscribe to events
@@ -358,7 +403,13 @@ class BacktestEngine:
         self._clock.set_time(start_time)
 
         # Initialize strategy
-        self._strategy.on_start()
+        if self._is_unified_strategy:
+            # Unified strategies have async lifecycle: initialize(bus) -> start()
+            await self._strategy.initialize(self._bus)
+            await self._strategy.start()
+        else:
+            # Legacy strategies have sync lifecycle
+            self._strategy.on_start()
 
         # Initialize position tracking
         self._cash = self.config.initial_capital
@@ -367,7 +418,7 @@ class BacktestEngine:
         # Reset metrics
         self._metrics.reset()
 
-        logger.debug("Backtest initialized")
+        logger.debug("Backtest initialized (unified=%s)", self._is_unified_strategy)
 
     async def _run_simulation(self) -> None:
         """Run the main simulation loop."""
@@ -390,11 +441,14 @@ class BacktestEngine:
             await self._execution_client.process_bar(bar)
 
             # Let strategy process bar
-            signal = self._strategy._process_bar(bar)
-
-            # Handle signal
-            if signal is not None:
-                await self._handle_signal(signal, bar)
+            if self._is_unified_strategy:
+                # Unified strategy: async on_bar() that executes orders directly
+                await self._strategy.on_bar(bar)
+            else:
+                # Legacy strategy: on_bar() returns Signal
+                signal = self._strategy._process_bar(bar)
+                if signal is not None:
+                    await self._handle_signal(signal, bar)
 
             # Track position changes for trade recording
             current_position = self._execution_client._positions.get(bar.symbol)
@@ -677,7 +731,16 @@ class BacktestEngine:
         """Clean up after backtest."""
         # Stop strategy
         if self._strategy is not None:
-            self._strategy.on_stop()
+            if self._is_unified_strategy:
+                # Unified strategies have async lifecycle
+                await self._strategy.stop()
+            else:
+                # Legacy strategies have sync lifecycle
+                self._strategy.on_stop()
+
+        # Disconnect gateway
+        if self._gateway is not None:
+            await self._gateway.disconnect()
 
         # Disconnect clients
         if self._data_client is not None:
@@ -719,7 +782,7 @@ class BacktestEngine:
         return self._is_running
 
     @property
-    def strategy(self) -> BaseStrategy | None:
+    def strategy(self) -> LegacyStrategy | Any | None:
         """Get the configured strategy."""
         return self._strategy
 
