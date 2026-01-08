@@ -378,6 +378,9 @@ class BacktestEngine:
         # Get bars directly (bypass stream_bars which has clock synchronization)
         bars_list = self._data_client._bar_events
 
+        # Track position changes for trade recording
+        prev_position: dict[str, Decimal] = {}
+
         for bar in bars_list:
             # Update clock to bar time
             bar_datetime = datetime.fromtimestamp(bar.timestamp_ns / 1_000_000_000)
@@ -393,13 +396,53 @@ class BacktestEngine:
             if signal is not None:
                 await self._handle_signal(signal, bar)
 
+            # Track position changes for trade recording
+            current_position = self._execution_client._positions.get(bar.symbol)
+            current_qty = current_position.amount if current_position else Decimal("0")
+            prev_qty = prev_position.get(bar.symbol, Decimal("0"))
+
+            if current_qty != prev_qty:
+                # Position changed - record trade
+                if current_qty > prev_qty:
+                    # Opened or added to position
+                    if prev_qty == 0:
+                        # New position opened
+                        self._metrics.open_trade(
+                            trade_id=f"trade_{uuid4().hex[:8]}",
+                            symbol=bar.symbol,
+                            side="long",
+                            entry_time_ns=bar.timestamp_ns,
+                            entry_price=bar.close,
+                            quantity=current_qty,
+                            fees=Decimal("0"),  # Fees handled in equity calculation
+                            entry_reason="signal",
+                        )
+                else:
+                    # Closed or reduced position
+                    if current_qty == 0:
+                        # Position fully closed
+                        self._metrics.close_trade(
+                            symbol=bar.symbol,
+                            exit_time_ns=bar.timestamp_ns,
+                            exit_price=bar.close,
+                            fees=Decimal("0"),
+                            exit_reason="signal",
+                        )
+
+                prev_position[bar.symbol] = current_qty
+
             # Record equity snapshot
             equity = self._calculate_equity(bar)
-            position_value = equity - self._cash
+            quote_balance = self._execution_client._balances.get(
+                bar.symbol.split("/")[1] if "/" in bar.symbol else "USDT"
+            )
+            cash = quote_balance.total if quote_balance else Decimal("0")
+            position_value = equity - cash
+
             self._metrics.record_equity(
                 timestamp_ns=bar.timestamp_ns,
                 equity=equity,
-                cash=self._cash,
+                cash=cash,
                 position_value=position_value,
             )
 
@@ -426,18 +469,24 @@ class BacktestEngine:
         else:
             return  # Unknown signal type
 
-        # Calculate order size
-        position = self._positions.get(signal.symbol, {})
-        current_qty = position.get("quantity", Decimal("0"))
+        # Get current position from execution client (not engine's stale state)
+        exec_position = self._execution_client._positions.get(signal.symbol)
+        current_qty = exec_position.amount if exec_position else Decimal("0")
+
+        # Get available cash from execution client
+        quote_currency = signal.symbol.split("/")[1] if "/" in signal.symbol else "USDT"
+        quote_balance = self._execution_client._balances.get(quote_currency)
+        available_cash = quote_balance.available if quote_balance else Decimal("0")
+
         amount: Decimal
 
         if signal.signal_type == SignalType.LONG:
             # Open long position - use available capital
-            order_value = self._cash * Decimal("0.95")  # Leave 5% buffer
+            order_value = available_cash * Decimal("0.95")  # Leave 5% buffer
             amount = order_value / bar.close
         elif signal.signal_type == SignalType.SHORT:
             # Open short position
-            order_value = self._cash * Decimal("0.95")
+            order_value = available_cash * Decimal("0.95")
             amount = order_value / bar.close
         elif signal.signal_type in (SignalType.CLOSE_LONG, SignalType.CLOSE_SHORT):
             # Close existing position
@@ -466,7 +515,7 @@ class BacktestEngine:
         # Submit order
         await self._execution_client.submit_order(order)
 
-    async def _on_bar(self, event: Event) -> None:  # noqa: ARG002
+    async def _on_bar(self, _event: Event) -> None:
         """Handle bar event from message bus."""
         # Bar processing is done in _run_simulation directly
         pass
@@ -579,22 +628,23 @@ class BacktestEngine:
                 )
 
     def _calculate_equity(self, bar: Bar) -> Decimal:
-        """Calculate total equity at current bar."""
-        equity = self._cash
+        """Calculate total equity at current bar using execution client state."""
+        assert self._execution_client is not None
 
-        for symbol, position in self._positions.items():
-            qty = position["quantity"]
-            if qty != 0:
-                # Use current bar price for marking
-                current_price = bar.close
-                if qty > 0:
-                    # Long position
-                    equity += qty * current_price
-                else:
-                    # Short position - gain when price falls
-                    entry_price = position["avg_price"]
-                    pnl = (entry_price - current_price) * abs(qty)
-                    equity += abs(qty) * entry_price + pnl
+        # Get balances from execution client
+        balances = self._execution_client._balances
+        positions = self._execution_client._positions
+
+        # Start with quote currency balance
+        quote_currency = bar.symbol.split("/")[1] if "/" in bar.symbol else "USDT"
+        quote_balance = balances.get(quote_currency)
+        equity = quote_balance.total if quote_balance else Decimal("0")
+
+        # Add position value
+        position = positions.get(bar.symbol)
+        if position and position.amount > 0:
+            # Mark to market
+            equity += position.amount * bar.close
 
         return equity
 
@@ -649,7 +699,12 @@ class BacktestEngine:
         """Async context manager entry."""
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:  # noqa: ARG002
+    async def __aexit__(
+        self,
+        _exc_type: Any,  # noqa: PYI036
+        _exc_val: Any,  # noqa: PYI036
+        _exc_tb: Any,  # noqa: PYI036
+    ) -> None:
         """Async context manager exit."""
         if self._is_running:
             await self._cleanup()
