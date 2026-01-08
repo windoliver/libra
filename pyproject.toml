@@ -17,6 +17,7 @@ dependencies = [
     "orjson>=3.10",                            # 10x faster JSON serialization
     "uvloop>=0.21; sys_platform != 'win32'",   # 2-4x faster asyncio (Unix only)
     "polars>=1.0",                             # 10-3500x faster than pandas
+    "pyyaml>=6.0",                             # YAML config files
 ]
 
 [project.optional-dependencies]

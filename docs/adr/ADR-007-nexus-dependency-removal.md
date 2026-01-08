@@ -1,4 +1,4 @@
-# ADR-007: Nexus Dependency Removal
+# ADR-007: Storage Architecture - Simple Local Storage
 
 **Status:** Accepted
 **Date:** 2026-01-08
@@ -6,137 +6,111 @@
 
 ## Context
 
-The original LIBRA design document referenced Nexus infrastructure for several capabilities:
+The original LIBRA design document referenced NexusFS for storage. After researching Nexus and how Aquarius uses it, we found:
 
-- **Plugin System** (`nexus.plugins`) for strategy adapters
-- **Agent System** (`nexus.core.agents`) for trading agents
-- **LangGraph Integration** (`nexus.tools.langgraph`) for multi-agent orchestration
-- **Storage** (`nexus.core.nexus_fs`) for file management
-- **Permissions** (`nexus.core.rebac`) for access control
+**What NexusFS provides:**
+- Virtual filesystem server for AI agents
+- Multi-tenant isolation (per-user path scoping)
+- Content-addressable storage (SHA-256 deduplication)
+- Versioning system
+- ReBAC permissions (Zanzibar-style)
+- E2B sandbox execution integration
+- Multi-backend mounting (S3, GCS, Google Drive)
 
-Issue #22 raised the question: Should we build the Nexus infrastructure, remove it, or use existing frameworks?
+**What LIBRA actually needs:**
+- Strategy configuration storage (YAML/JSON)
+- Backtest results storage (efficient columnar format)
+- Trade history (already in QuestDB)
+- Time-series data (already in QuestDB)
 
 ## Decision
 
-**We will use existing Python frameworks instead of building Nexus infrastructure (Option C).**
+**Use simple local storage (`~/.libra/`) instead of NexusFS.**
 
-## Options Considered
-
-### Option A: Build Nexus Infrastructure
-- **Pros:** Full control, custom features
-- **Cons:** Significant engineering effort (6+ months), delays core trading functionality
-- **Verdict:** Rejected - not justified for a trading platform
-
-### Option B: Remove Nexus Dependency (Simplify)
-- **Pros:** Simple, fast to implement
-- **Cons:** Loses plugin architecture, less extensible
-- **Verdict:** Partially adopted - remove Nexus, but keep extensibility
-
-### Option C: Use Existing Frameworks (Selected)
-- **Pros:** Battle-tested, well-documented, community support
-- **Cons:** Less custom control
-- **Verdict:** Selected - best balance of features and effort
+LIBRA is a single-user trading platform. NexusFS features like multi-tenant isolation, ReBAC permissions, and cloud backend mounting are unnecessary overhead.
 
 ## Implementation
 
-Each Nexus component is replaced with a standard Python alternative:
+### Directory Structure
 
-| Nexus Component | Replacement | Rationale |
-|-----------------|-------------|-----------|
-| `nexus.plugins` | `importlib` + `entry_points` | Standard Python plugin discovery |
-| `nexus.core.agents` | Direct LangGraph | Already using LangGraph for orchestration |
-| `nexus.tools.langgraph` | `langgraph` directly | No wrapper needed |
-| `nexus.core.nexus_fs` | Local filesystem + QuestDB | Simple storage + time-series DB |
-| `nexus.core.rebac` | Simple role-based checks | Trading platform doesn't need complex RBAC |
-
-### Plugin System Design
-
-```python
-# Using entry_points for plugin discovery
-# pyproject.toml
-[project.entry-points."libra.strategies"]
-freqtrade = "libra.plugins.freqtrade_adapter:FreqtradeAdapter"
-hummingbot = "libra.plugins.hummingbot_adapter:HummingbotAdapter"
-
-# Plugin loading
-from importlib.metadata import entry_points
-
-def load_strategy_plugins() -> dict[str, type]:
-    """Load all registered strategy plugins."""
-    plugins = {}
-    eps = entry_points(group="libra.strategies")
-    for ep in eps:
-        plugins[ep.name] = ep.load()
-    return plugins
+```
+~/.libra/
+├── config/
+│   └── libra.yaml           # Main configuration
+├── strategies/
+│   ├── my_strategy/
+│   │   ├── config.yaml      # Strategy parameters
+│   │   └── state.json       # Runtime state (optional)
+│   └── ...
+├── results/
+│   ├── backtests/
+│   │   ├── 2026-01-08_btc_momentum.parquet
+│   │   └── ...
+│   └── live/
+│       └── trades_2026-01.parquet
+├── logs/
+│   └── libra.log
+└── cache/
+    └── ...
 ```
 
-### Agent System Design
+### Storage Formats
+
+| Data Type | Format | Rationale |
+|-----------|--------|-----------|
+| Configuration | YAML | Human-readable, easy to edit |
+| Backtest results | Parquet | Fast, columnar, good compression |
+| Trade logs | Parquet | Efficient for time-series analysis |
+| Runtime state | JSON | Simple, debuggable |
+
+### Code Design
 
 ```python
-# Direct LangGraph usage without Nexus wrapper
-from langgraph.graph import StateGraph
-
-class TradingAgentOrchestrator:
-    """Multi-agent trading analysis using LangGraph directly."""
-
-    def __init__(self, llm):
-        self.llm = llm
-        self.graph = self._build_graph()
-
-    def _build_graph(self) -> StateGraph:
-        workflow = StateGraph(TradingState)
-        # Add nodes and edges directly
-        workflow.add_node("fundamentals", self._fundamentals_agent)
-        workflow.add_node("technical", self._technical_agent)
-        # ... etc
-        return workflow.compile()
-```
-
-### Storage Design
-
-```python
-# Local filesystem + QuestDB for time-series
 from pathlib import Path
-from libra.data import AsyncQuestDBClient
+import yaml
+import polars as pl
 
-LIBRA_HOME = Path.home() / ".libra"
+class LocalStorage:
+    """Simple local storage for LIBRA."""
 
-class Storage:
-    """Simple local storage without NexusFS."""
+    def __init__(self, root: Path | None = None):
+        self.root = root or Path.home() / ".libra"
+        self._ensure_dirs()
 
-    strategies_dir = LIBRA_HOME / "strategies"
-    configs_dir = LIBRA_HOME / "configs"
-    results_dir = LIBRA_HOME / "results"
+    def save_backtest(self, name: str, results: pl.DataFrame) -> Path:
+        """Save backtest results as Parquet."""
+        path = self.root / "results" / "backtests" / f"{name}.parquet"
+        results.write_parquet(path)
+        return path
 
-    @classmethod
-    def ensure_dirs(cls):
-        for d in [cls.strategies_dir, cls.configs_dir, cls.results_dir]:
-            d.mkdir(parents=True, exist_ok=True)
+    def load_strategy_config(self, name: str) -> dict:
+        """Load strategy configuration."""
+        path = self.root / "strategies" / name / "config.yaml"
+        return yaml.safe_load(path.read_text())
 ```
 
 ## Consequences
 
 ### Positive
-- Faster time to market (weeks instead of months)
-- Standard Python patterns (easier for contributors)
-- No maintenance burden for custom infrastructure
-- Better documentation (standard libraries are well-documented)
+- Simple, no external dependencies
+- Easy to debug (just look at files)
+- Fast (local filesystem)
+- Portable (copy `~/.libra/` to backup)
 
 ### Negative
-- Less flexibility than custom solution
-- Multiple small dependencies instead of one unified framework
+- No multi-user support (not needed for LIBRA)
+- No built-in versioning (use git if needed)
+- No cloud sync (can add later if needed)
 
-### Neutral
-- Need to document plugin development process
-- Agent definitions remain similar, just without Nexus registration
+### Migration Path
 
-## Related Issues
-
-- Issue #22: [Decision] Nexus Dependency - Build or Remove
-- Aquarius codebase exploration for patterns
+If LIBRA later needs multi-tenant or cloud storage:
+1. Abstract storage behind a protocol
+2. Add NexusFS or S3 backend
+3. Existing local storage continues to work
 
 ## References
 
-- [Python Entry Points](https://packaging.python.org/en/latest/specifications/entry-points/)
-- [LangGraph Documentation](https://python.langchain.com/docs/langgraph)
-- [importlib.metadata](https://docs.python.org/3/library/importlib.metadata.html)
+- [QuantStart - Securities Master Databases](https://www.quantstart.com/articles/Securities-Master-Databases-for-Algorithmic-Trading/)
+- [Optimizing Data Handling for Backtesting](https://medium.com/@twkim323/optimizing-data-handling-for-backtesting-b62be848a314)
+- Parquet format: Columnar, 10x smaller than CSV, fast random access
