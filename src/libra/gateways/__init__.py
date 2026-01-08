@@ -28,7 +28,34 @@ Usage:
         result = await gateway.submit_order(order)
 """
 
+from libra.gateways.ccxt_fetchers import (
+    CCXTBalanceFetcher,
+    CCXTBarFetcher,
+    CCXTOrderBookFetcher,
+    CCXTQuoteFetcher,
+)
 from libra.gateways.ccxt_gateway import CCXTGateway
+from libra.gateways.fetcher import (
+    # Query types
+    AccountBalance,
+    BalanceQuery,
+    Bar,
+    BarQuery,
+    BaseQuery,
+    # Fetcher protocol
+    FetcherRegistry,
+    GatewayFetcher,
+    OrderBookLevel,
+    OrderBookQuery,
+    OrderBookSnapshot,
+    OrderQuery,
+    PositionQuery,
+    Quote,
+    TickQuery,
+    TradeQuery,
+    # Registry
+    fetcher_registry,
+)
 from libra.gateways.paper_gateway import PaperGateway, SlippageConfig, SlippageModel
 from libra.gateways.protocol import (
     # Exceptions
@@ -64,6 +91,27 @@ from libra.gateways.protocol import (
 
 
 __all__ = [
+    # Fetcher pattern (Issue #27)
+    "AccountBalance",
+    "BalanceQuery",
+    "Bar",
+    "BarQuery",
+    "BaseQuery",
+    "CCXTBalanceFetcher",
+    "CCXTBarFetcher",
+    "CCXTOrderBookFetcher",
+    "CCXTQuoteFetcher",
+    "FetcherRegistry",
+    "GatewayFetcher",
+    "OrderBookLevel",
+    "OrderBookQuery",
+    "OrderBookSnapshot",
+    "OrderQuery",
+    "PositionQuery",
+    "Quote",
+    "TickQuery",
+    "TradeQuery",
+    "fetcher_registry",
     # Exceptions
     "AuthenticationError",
     # Data structures
