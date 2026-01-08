@@ -121,7 +121,15 @@ class HelpScreen(ModalScreen):
                 ("l / →", "Next tab"),
                 ("g", "Go to top"),
                 ("G", "Go to bottom"),
-                ("1-4", "Switch to tab directly"),
+                ("1-5", "Switch to tab directly"),
+            ],
+        ),
+        (
+            "TRADING",
+            [
+                ("o / n", "Open order entry form"),
+                ("Ctrl+Enter", "Submit order (in form)"),
+                ("ESC", "Cancel order / Close modal"),
             ],
         ),
         (

@@ -39,12 +39,13 @@ from textual.widgets import (
     TabPane,
 )
 
-from libra.tui.screens import HelpScreen
+from libra.tui.screens import HelpScreen, OrderEntryResult, OrderEntryScreen
 from libra.tui.widgets import (
     BalanceDisplay,
     CommandInput,
     LogViewer,
     PositionDisplay,
+    RiskDashboard,
     StatusBar,
 )
 
@@ -167,6 +168,9 @@ class LibraApp(App):
         Binding("ctrl+p", "command_palette", "Commands", id="app.palette"),
         Binding("ctrl+c", "copy_log", "Copy", priority=True, id="app.copy"),
         Binding("escape", "unfocus_or_quit", "Cancel", priority=True, id="app.escape"),
+        # Order entry
+        Binding("o", "open_order_entry", "Order", id="app.order"),
+        Binding("n", "open_order_entry", "New", show=False, id="app.new_order"),
         # Command input focus
         Binding("slash", "focus_command", "/Cmd", id="cmd.focus_slash"),
         Binding("colon", "focus_command", ":Cmd", show=False, id="cmd.focus_colon"),
@@ -182,6 +186,7 @@ class LibraApp(App):
         Binding("2", "switch_tab('positions')", show=False, id="tab.2"),
         Binding("3", "switch_tab('orders')", show=False, id="tab.3"),
         Binding("4", "switch_tab('settings')", show=False, id="tab.4"),
+        Binding("5", "switch_tab('risk')", show=False, id="tab.5"),
     ]
 
     def __init__(
@@ -245,6 +250,13 @@ class LibraApp(App):
                     yield Static("Order History", classes="panel-title")
                     yield Rule()
                     yield Static("[dim]No pending orders[/dim]", id="orders-placeholder")
+
+            with TabPane("Risk", id="risk"):
+                with VerticalScroll():
+                    yield RiskDashboard(
+                        symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+                        id="risk-dashboard",
+                    )
 
             with TabPane("Settings", id="settings"):
                 with VerticalScroll():
@@ -312,6 +324,7 @@ class LibraApp(App):
         self.set_interval(4.0, self._simulate_event)
         self.set_interval(2.0, self._update_positions)
         self.set_interval(8.0, self._simulate_risk_event)
+        self.set_interval(3.0, self._update_risk_dashboard)
 
     def _setup_live_mode(self) -> None:
         """Setup for live trading mode."""
@@ -426,6 +439,46 @@ class LibraApp(App):
     def action_show_help_overlay(self) -> None:
         """Show the help overlay modal (? key)."""
         self.push_screen(HelpScreen())
+
+    def action_open_order_entry(self) -> None:
+        """Open the order entry modal (o key)."""
+        symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+        current_prices = {
+            "BTC/USDT": self._btc_price,
+            "ETH/USDT": self._eth_price,
+            "SOL/USDT": self._sol_price,
+        }
+
+        def handle_order_result(result: OrderEntryResult | None) -> None:
+            """Handle the result from order entry screen."""
+            if result is None or not result.submitted:
+                self.query_one(LogViewer).log_message("Order cancelled", "debug")
+                return
+
+            # Log the order
+            log = self.query_one(LogViewer)
+            log.log_message(
+                f"{ICON_UP if result.side == 'BUY' else ICON_DOWN} ORDER {result.side} "
+                f"{result.quantity} {result.symbol} @ "
+                f"{'MARKET' if result.order_type == 'MARKET' else f'${result.price:,.2f}'}",
+                "success",
+            )
+
+            # Show notification
+            self._throttled_notify(
+                f"{result.side} {result.quantity} {result.symbol}",
+                title="Order Submitted",
+                severity="information",
+                timeout=3,
+            )
+
+        self.push_screen(
+            OrderEntryScreen(
+                symbols=symbols,
+                current_prices=current_prices,
+            ),
+            handle_order_result,
+        )
 
     def action_focus_command(self) -> None:
         """Focus the command input (/ or :)."""
@@ -569,6 +622,30 @@ class LibraApp(App):
             msg = random.choice(events)  # noqa: S311
             self.query_one(LogViewer).log_message(f"⚠ RISK {msg}", "warning")
             self._throttled_notify(msg, title="Risk Alert", severity="warning", timeout=5)
+
+    def _update_risk_dashboard(self) -> None:
+        """Update risk dashboard with simulated data."""
+        try:
+            dashboard = self.query_one("#risk-dashboard", RiskDashboard)
+
+            # Simulate changing values
+            drawdown = random.uniform(1.0, 8.0)  # noqa: S311
+            daily_pnl = random.uniform(-3000, 1000)  # noqa: S311
+            order_rate = random.randint(1, 5)  # noqa: S311
+
+            dashboard.set_trading_state("ACTIVE")
+            dashboard.set_drawdown(drawdown, 10.0)
+            dashboard.set_daily_pnl(daily_pnl, 10000)
+            dashboard.set_order_rate(order_rate, 10)
+
+            # Simulate position exposures
+            dashboard.set_exposure("BTC/USDT", random.uniform(40, 80), 100)  # noqa: S311
+            dashboard.set_exposure("ETH/USDT", random.uniform(20, 50), 75)  # noqa: S311
+            dashboard.set_exposure("SOL/USDT", random.uniform(10, 30), 50)  # noqa: S311
+
+            dashboard.set_circuit_breaker("CLOSED")
+        except Exception:
+            pass
 
     # =========================================================================
     # Live Mode Event Handling
