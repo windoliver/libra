@@ -41,13 +41,20 @@ from textual.widgets import (
 
 from libra.tui.demo_trader import DemoTrader, TradingState as DemoTradingState
 from libra.tui.screens import HelpScreen, OrderEntryResult, OrderEntryScreen
+from libra.tui.screens.strategy_management import (
+    StrategyDetailPanel,
+    StrategyListPanel,
+)
 from libra.tui.widgets import (
     BalanceDisplay,
     CommandInput,
     LogViewer,
     PositionDisplay,
+    PositionInfo,
     RiskDashboard,
     StatusBar,
+    StrategyInfo,
+    StrategyTree,
 )
 
 
@@ -186,8 +193,9 @@ class LibraApp(App):
         Binding("1", "switch_tab('dashboard')", show=False, id="tab.1"),
         Binding("2", "switch_tab('positions')", show=False, id="tab.2"),
         Binding("3", "switch_tab('orders')", show=False, id="tab.3"),
-        Binding("4", "switch_tab('settings')", show=False, id="tab.4"),
-        Binding("5", "switch_tab('risk')", show=False, id="tab.5"),
+        Binding("4", "switch_tab('risk')", show=False, id="tab.4"),
+        Binding("5", "switch_tab('strategies')", show=False, id="tab.5"),
+        Binding("6", "switch_tab('settings')", show=False, id="tab.6"),
     ]
 
     def __init__(
@@ -261,6 +269,14 @@ class LibraApp(App):
                         symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
                         id="risk-dashboard",
                     )
+
+            with TabPane("Strategies", id="strategies"):
+                with Horizontal(id="strategy-panels"):
+                    yield StrategyListPanel(
+                        strategies=self._get_demo_strategies(),
+                        id="strategy-list-panel",
+                    )
+                    yield StrategyDetailPanel(id="strategy-detail-panel")
 
             with TabPane("Settings", id="settings"):
                 with VerticalScroll():
@@ -554,9 +570,81 @@ class LibraApp(App):
         self.exit()
 
     # =========================================================================
+    # Strategy Management Event Handlers
+    # =========================================================================
+
+    def on_strategy_tree_strategy_selected(
+        self, event: StrategyTree.StrategySelected
+    ) -> None:
+        """Handle strategy selection from tree."""
+        strategy_id = event.strategy_id
+        strategies = {s.strategy_id: s for s in self._get_demo_strategies()}
+
+        if strategy_id in strategies:
+            strategy = strategies[strategy_id]
+            try:
+                detail_panel = self.query_one("#strategy-detail-panel", StrategyDetailPanel)
+                detail_panel.show_strategy(strategy)
+            except Exception as e:
+                self.query_one(LogViewer).log_message(f"Error showing strategy: {e}", "error")
+
+    # =========================================================================
     # Demo Simulation
     # =========================================================================
 
+    def _get_demo_strategies(self) -> list[StrategyInfo]:
+        """Generate demo strategies for the strategy management tab."""
+        return [
+            StrategyInfo(
+                strategy_id="sma_cross_btc",
+                name="SMA_Cross_BTC",
+                status="RUNNING",
+                symbols=["BTC/USDT", "ETH/USDT"],
+                positions={
+                    "BTC/USDT": PositionInfo(
+                        symbol="BTC/USDT",
+                        side="LONG",
+                        size=Decimal("0.1"),
+                        entry_price=Decimal("42500"),
+                        current_price=Decimal("43200"),
+                        unrealized_pnl=Decimal("70"),
+                    ),
+                },
+                total_pnl=Decimal("1250.50"),
+                total_trades=42,
+                win_rate=65.2,
+            ),
+            StrategyInfo(
+                strategy_id="rsi_mean_revert",
+                name="RSI_Mean_Revert",
+                status="RUNNING",
+                symbols=["ETH/USDT", "SOL/USDT"],
+                positions={},
+                total_pnl=Decimal("340.25"),
+                total_trades=28,
+                win_rate=57.1,
+            ),
+            StrategyInfo(
+                strategy_id="macd_momentum",
+                name="MACD_Momentum",
+                status="STOPPED",
+                symbols=["BTC/USDT"],
+                positions={},
+                total_pnl=Decimal("-120.00"),
+                total_trades=15,
+                win_rate=40.0,
+            ),
+            StrategyInfo(
+                strategy_id="funding_arb",
+                name="Funding_Arb",
+                status="PAUSED",
+                symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+                positions={},
+                total_pnl=Decimal("0"),
+                total_trades=0,
+                win_rate=0.0,
+            ),
+        ]
 
     def _update_positions(self) -> None:
         """Update position tables with CVD-friendly icons."""

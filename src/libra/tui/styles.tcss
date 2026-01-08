@@ -207,3 +207,104 @@ VerticalScroll {
     height: 1fr;
     padding: 0 1;
 }
+
+/* ============================================================================
+   STRATEGY MANAGEMENT SCREEN
+   ============================================================================ */
+
+StrategyManagementScreen {
+    layout: horizontal;
+}
+
+/* Strategy List Panel */
+StrategyListPanel {
+    width: 40;
+    border-right: solid $primary-darken-2;
+}
+
+StrategyListPanel .panel-title {
+    height: 1;
+    text-style: bold;
+    background: $primary-darken-2;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+/* Strategy Detail Panel */
+StrategyDetailPanel {
+    width: 1fr;
+}
+
+/* Collapsible sections */
+Collapsible {
+    border: round $primary-darken-2;
+    margin-bottom: 1;
+}
+
+Collapsible.-collapsed {
+    height: auto;
+}
+
+CollapsibleTitle {
+    background: $surface-darken-1;
+    padding: 0 1;
+}
+
+CollapsibleTitle:hover {
+    background: $surface;
+}
+
+CollapsibleTitle:focus {
+    background: $primary-darken-2;
+}
+
+/* Strategy Cards in list */
+StrategyCard {
+    height: 3;
+    margin-bottom: 1;
+}
+
+/* Metrics Grid */
+.metrics-grid {
+    layout: grid;
+    grid-size: 2;
+    grid-gutter: 1;
+}
+
+MetricCard {
+    height: 4;
+    border: round $primary-darken-2;
+}
+
+/* Input fields in forms */
+ParameterRow Input {
+    border: round $primary-darken-2;
+}
+
+ParameterRow Input:focus {
+    border: round $primary;
+}
+
+ParameterRow Input.-invalid {
+    border: round $error;
+}
+
+/* Modal screens */
+StrategyEditModal > Container,
+StrategyCreateModal > Container,
+ConfirmationModal > Container {
+    background: $surface;
+    border: round $primary;
+}
+
+/* Control bar buttons */
+StrategyControlBar Button {
+    min-width: 10;
+    margin: 0 1;
+}
+
+/* Sparkline styling */
+Sparkline {
+    height: 1;
+    min-width: 10;
+}
