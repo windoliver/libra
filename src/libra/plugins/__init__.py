@@ -17,15 +17,22 @@ Usage:
 
 from libra.plugins.base import PluginMetadata, StrategyPlugin
 from libra.plugins.loader import (
+    discover_gateways,
     discover_strategies,
-    load_strategy,
     list_strategy_plugins,
+    load_gateway,
+    load_strategy,
 )
 
 __all__ = [
+    # Base classes
     "PluginMetadata",
     "StrategyPlugin",
+    # Strategy plugins
     "discover_strategies",
-    "load_strategy",
     "list_strategy_plugins",
+    "load_strategy",
+    # Gateway plugins (Issue #29)
+    "discover_gateways",
+    "load_gateway",
 ]

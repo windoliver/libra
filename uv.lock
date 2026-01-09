@@ -877,6 +877,20 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all-plugins = [
+    { name = "asyncpg" },
+    { name = "ccxt" },
+    { name = "freqtrade" },
+    { name = "pandas" },
+    { name = "pandas-ta" },
+    { name = "questdb" },
+    { name = "technical" },
+    { name = "textual" },
+    { name = "textual-plotext" },
+]
+ccxt = [
+    { name = "ccxt" },
+]
 database = [
     { name = "asyncpg" },
     { name = "questdb" },
@@ -891,9 +905,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
     { name = "ruff" },
-]
-exchange = [
-    { name = "ccxt" },
 ]
 freqtrade = [
     { name = "freqtrade" },
@@ -913,9 +924,10 @@ validation = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "asyncpg", marker = "extra == 'database'", specifier = ">=0.29" },
-    { name = "ccxt", marker = "extra == 'exchange'", specifier = ">=4.0" },
+    { name = "ccxt", marker = "extra == 'ccxt'", specifier = ">=4.0" },
     { name = "freqtrade", marker = "extra == 'freqtrade'", specifier = ">=2024.1" },
     { name = "hdrhistogram", marker = "extra == 'dev'", specifier = ">=0.10" },
+    { name = "libra", extras = ["ccxt", "freqtrade", "tui", "database"], marker = "extra == 'all-plugins'" },
     { name = "msgspec", specifier = ">=0.18" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
     { name = "orjson", specifier = ">=3.10" },
@@ -938,7 +950,7 @@ requires-dist = [
     { name = "textual-plotext", marker = "extra == 'tui'", specifier = ">=1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21" },
 ]
-provides-extras = ["dev", "exchange", "tui", "validation", "database", "freqtrade"]
+provides-extras = ["dev", "ccxt", "all-plugins", "tui", "validation", "database", "freqtrade"]
 
 [[package]]
 name = "librt"

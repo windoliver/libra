@@ -37,9 +37,14 @@ dev = [
     "pre-commit>=3.6",
 ]
 
-# Future: exchange connectivity
-exchange = [
+# Exchange connectivity plugins (Issue #29)
+ccxt = [
     "ccxt>=4.0",
+]
+
+# All optional plugins (convenience install)
+all-plugins = [
+    "libra[ccxt,freqtrade,tui,database]",
 ]
 
 # TUI - Terminal User Interface (v4.0+ required for Markdown streaming)
@@ -73,6 +78,11 @@ libra = "libra.cli:main"
 # Plugin entry points for strategy discovery (ADR-007)
 [project.entry-points."libra.strategies"]
 freqtrade = "libra.plugins.freqtrade_adapter:FreqtradeAdapter"
+
+# Gateway plugin entry points (Issue #29)
+[project.entry-points."libra.gateways"]
+paper = "libra.gateways.paper_gateway:PaperGateway"
+ccxt = "libra.gateways.ccxt_gateway:CCXTGateway"
 
 [build-system]
 requires = ["hatchling"]

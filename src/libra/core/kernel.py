@@ -29,6 +29,11 @@ from libra.core.cache import Cache
 from libra.core.clock import Clock, ClockType
 from libra.core.events import Event, EventType
 from libra.core.message_bus import MessageBus, MessageBusConfig
+from libra.plugins.loader import (
+    discover_gateways,
+    discover_strategies,
+    list_strategy_plugins,
+)
 from libra.strategies.actor import BaseActor, ComponentState
 
 
@@ -109,6 +114,10 @@ class KernelConfig:
     # Cache settings
     cache_max_bars: int = 1000
     cache_max_orders: int = 10000
+
+    # Plugin discovery (Issue #29)
+    discover_plugins: bool = True  # Discover registered plugins at startup
+    log_plugins: bool = True  # Log discovered plugins
 
     def __post_init__(self) -> None:
         """Validate configuration."""
@@ -528,6 +537,70 @@ class TradingKernel:
         return None
 
     # =========================================================================
+    # Plugin Discovery (Issue #29)
+    # =========================================================================
+
+    def discover_plugins(self) -> dict[str, dict[str, type]]:
+        """
+        Discover all registered plugins via entry_points.
+
+        Returns:
+            Dictionary with 'strategies' and 'gateways' keys,
+            each mapping plugin names to their classes.
+
+        Example:
+            plugins = kernel.discover_plugins()
+            print(plugins['strategies'])  # {'freqtrade': FreqtradeAdapter}
+            print(plugins['gateways'])    # {'paper': PaperGateway, 'ccxt': CCXTGateway}
+        """
+        strategies = discover_strategies()
+        gateways = discover_gateways()
+
+        if self._config.log_plugins:
+            logger.info(
+                "Discovered %d strategy plugin(s): %s",
+                len(strategies),
+                list(strategies.keys()) or "(none)",
+            )
+            logger.info(
+                "Discovered %d gateway plugin(s): %s",
+                len(gateways),
+                list(gateways.keys()) or "(none)",
+            )
+
+            # Log detailed plugin metadata
+            for meta in list_strategy_plugins():
+                logger.debug(
+                    "  Strategy plugin: %s v%s - %s",
+                    meta.name,
+                    meta.version,
+                    meta.description,
+                )
+
+        return {
+            "strategies": strategies,
+            "gateways": gateways,
+        }
+
+    def get_available_gateways(self) -> dict[str, type]:
+        """
+        Get all available gateway plugins.
+
+        Returns:
+            Dictionary mapping gateway names to their classes.
+        """
+        return discover_gateways()
+
+    def get_available_strategies(self) -> dict[str, type]:
+        """
+        Get all available strategy plugins.
+
+        Returns:
+            Dictionary mapping strategy plugin names to their classes.
+        """
+        return discover_strategies()
+
+    # =========================================================================
     # Startup
     # =========================================================================
 
@@ -597,6 +670,10 @@ class TradingKernel:
 
     async def _startup_sequence(self) -> None:
         """Execute the startup sequence in correct order."""
+        # 0. Discover registered plugins (Issue #29)
+        if self._config.discover_plugins:
+            self.discover_plugins()
+
         # 1. Start MessageBus
         logger.debug("Starting MessageBus...")
         self._bus_task = asyncio.create_task(self._bus.start())
