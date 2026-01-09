@@ -87,6 +87,7 @@ libra = "libra.cli:main"
 # Plugin entry points for strategy discovery (ADR-007)
 [project.entry-points."libra.strategies"]
 freqtrade = "libra.plugins.freqtrade_adapter:FreqtradeAdapter"
+hummingbot = "libra.plugins.hummingbot_adapter:HummingbotAdapter"
 
 # Gateway plugin entry points (Issue #29)
 [project.entry-points."libra.gateways"]
