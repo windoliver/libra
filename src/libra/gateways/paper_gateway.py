@@ -678,6 +678,59 @@ class PaperGateway(BaseGateway):
                     results.append(self._create_order_result(open_order))
         return results
 
+    async def get_order_history(
+        self, symbol: str | None = None, limit: int | None = None
+    ) -> list[OrderResult]:
+        """Get order history (all orders, open and closed, Issue #27)."""
+        results = []
+        for open_order in self._orders.values():
+            if symbol is None or open_order.order.symbol == symbol:
+                results.append(self._create_order_result(open_order))
+
+        # Sort by timestamp descending
+        results.sort(key=lambda r: r.timestamp_ns, reverse=True)
+
+        if limit is not None:
+            results = results[:limit]
+
+        return results
+
+    async def get_trades(
+        self, symbol: str | None = None, limit: int | None = None
+    ) -> list:
+        """Get trade/fill history (Issue #27)."""
+        from libra.gateways.fetcher import TradeRecord
+
+        trades = []
+        for open_order in self._orders.values():
+            if symbol is not None and open_order.order.symbol != symbol:
+                continue
+
+            for trade in open_order.trades:
+                trades.append(
+                    TradeRecord(
+                        trade_id=f"{open_order.order_id}-{trade['timestamp']}",
+                        order_id=open_order.order_id,
+                        symbol=open_order.order.symbol,
+                        side=open_order.order.side.value,
+                        amount=Decimal(trade["amount"]),
+                        price=Decimal(trade["price"]),
+                        cost=Decimal(trade["amount"]) * Decimal(trade["price"]),
+                        fee=Decimal(trade["fee"]) if trade.get("fee") else None,
+                        fee_currency=open_order.order.symbol.split("/")[1],
+                        timestamp_ns=trade["timestamp"],
+                        taker_or_maker="maker" if trade.get("is_maker", False) else "taker",
+                    )
+                )
+
+        # Sort by timestamp descending
+        trades.sort(key=lambda t: t.timestamp_ns, reverse=True)
+
+        if limit is not None:
+            trades = trades[:limit]
+
+        return trades
+
     def _create_order_result(self, open_order: OpenOrder) -> OrderResult:
         """Create OrderResult from internal state."""
         order = open_order.order

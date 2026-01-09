@@ -61,6 +61,17 @@ from libra.gateways.protocol import (
     TimeInForce,
 )
 
+# Import fetchers for TET pipeline pattern (Issue #27)
+from libra.gateways.ccxt_fetchers import (
+    CCXTBalanceFetcher,
+    CCXTOrderBookFetcher,
+    CCXTOrderFetcher,
+    CCXTPositionFetcher,
+    CCXTQuoteFetcher,
+    CCXTTradeFetcher,
+)
+from libra.gateways.fetcher import AccountOrder, AccountPosition, TradeRecord
+
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -147,6 +158,14 @@ class CCXTGateway(BaseGateway):
         self._stream_tasks: list[asyncio.Task[Any]] = []
         self._stop_streaming = asyncio.Event()
 
+        # Fetchers (lazy-initialized after connect)
+        self._position_fetcher: CCXTPositionFetcher | None = None
+        self._order_fetcher: CCXTOrderFetcher | None = None
+        self._trade_fetcher: CCXTTradeFetcher | None = None
+        self._balance_fetcher: CCXTBalanceFetcher | None = None
+        self._orderbook_fetcher: CCXTOrderBookFetcher | None = None
+        self._quote_fetcher: CCXTQuoteFetcher | None = None
+
     # -------------------------------------------------------------------------
     # Connection Management
     # -------------------------------------------------------------------------
@@ -219,6 +238,9 @@ class CCXTGateway(BaseGateway):
                 except Exception as e:
                     raise AuthenticationError(f"Authentication failed: {e}") from e
 
+            # Initialize fetchers with the exchange instance
+            self._init_fetchers()
+
             self._connected = True
             logger.info(f"{self.name}: Connected successfully")
 
@@ -226,6 +248,15 @@ class CCXTGateway(BaseGateway):
             raise
         except Exception as e:
             raise ConnectionError(f"Failed to connect to {self.name}: {e}") from e
+
+    def _init_fetchers(self) -> None:
+        """Initialize fetchers with the exchange instance."""
+        self._position_fetcher = CCXTPositionFetcher(self._exchange)
+        self._order_fetcher = CCXTOrderFetcher(self._exchange)
+        self._trade_fetcher = CCXTTradeFetcher(self._exchange)
+        self._balance_fetcher = CCXTBalanceFetcher(self._exchange)
+        self._orderbook_fetcher = CCXTOrderBookFetcher(self._exchange)
+        self._quote_fetcher = CCXTQuoteFetcher(self._exchange)
 
     async def disconnect(self) -> None:
         """
@@ -636,6 +667,114 @@ class CCXTGateway(BaseGateway):
         except Exception as e:
             raise GatewayError(f"Failed to fetch open orders: {e}") from e
 
+    async def get_order_history(
+        self,
+        symbol: str | None = None,
+        limit: int | None = None,
+    ) -> list[OrderResult]:
+        """
+        Get order history (closed orders).
+
+        Uses CCXTOrderFetcher for TET pipeline (Issue #27).
+
+        Args:
+            symbol: Optional symbol to filter
+            limit: Maximum number of orders to return
+
+        Returns:
+            List of closed OrderResults
+        """
+        if not self._connected:
+            raise ConnectionError("Not connected")
+
+        try:
+            if self._order_fetcher is None:
+                raise GatewayError("Order fetcher not initialized")
+
+            fetcher_orders = await self._order_fetcher.fetch(
+                symbol=symbol,
+                status="closed",
+                limit=limit,
+            )
+            return [self._convert_fetcher_order(o) for o in fetcher_orders]
+
+        except Exception as e:
+            raise GatewayError(f"Failed to fetch order history: {e}") from e
+
+    def _convert_fetcher_order(self, order: AccountOrder) -> OrderResult:
+        """Convert fetcher AccountOrder to protocol OrderResult."""
+        # Map status string to OrderStatus
+        status_map = {
+            "open": OrderStatus.OPEN,
+            "closed": OrderStatus.FILLED,
+            "canceled": OrderStatus.CANCELLED,
+            "cancelled": OrderStatus.CANCELLED,
+            "rejected": OrderStatus.REJECTED,
+            "expired": OrderStatus.EXPIRED,
+            "partially_filled": OrderStatus.PARTIALLY_FILLED,
+        }
+        status = status_map.get(order.status.lower(), OrderStatus.PENDING)
+
+        # Map order type
+        type_map = {
+            "market": OrderType.MARKET,
+            "limit": OrderType.LIMIT,
+            "stop": OrderType.STOP,
+            "stop_limit": OrderType.STOP_LIMIT,
+        }
+        order_type = type_map.get(order.order_type.lower(), OrderType.MARKET)
+
+        return OrderResult(
+            order_id=order.order_id,
+            symbol=order.symbol,
+            status=status,
+            side=OrderSide(order.side),
+            order_type=order_type,
+            amount=order.amount,
+            filled_amount=order.filled,
+            remaining_amount=order.remaining or (order.amount - order.filled),
+            average_price=order.average,
+            fee=order.fee or Decimal("0"),
+            fee_currency=order.fee_currency or "",
+            timestamp_ns=order.timestamp_ns,
+            created_ns=order.timestamp_ns,
+            client_order_id=order.client_order_id,
+            price=order.price,
+            stop_price=order.stop_price,
+        )
+
+    async def get_trades(
+        self,
+        symbol: str | None = None,
+        limit: int | None = None,
+    ) -> list[TradeRecord]:
+        """
+        Get trade/fill history.
+
+        Uses CCXTTradeFetcher for TET pipeline (Issue #27).
+
+        Args:
+            symbol: Optional symbol to filter
+            limit: Maximum number of trades to return
+
+        Returns:
+            List of TradeRecords
+        """
+        if not self._connected:
+            raise ConnectionError("Not connected")
+
+        try:
+            if self._trade_fetcher is None:
+                raise GatewayError("Trade fetcher not initialized")
+
+            return await self._trade_fetcher.fetch(
+                symbol=symbol,
+                limit=limit,
+            )
+
+        except Exception as e:
+            raise GatewayError(f"Failed to fetch trades: {e}") from e
+
     def _convert_order_result(self, data: dict[str, Any]) -> OrderResult:
         """Convert CCXT order to OrderResult."""
         # Map CCXT status to OrderStatus
@@ -703,6 +842,8 @@ class CCXTGateway(BaseGateway):
         """
         Get all open positions.
 
+        Uses CCXTPositionFetcher for TET pipeline (Issue #27).
+
         Returns:
             List of current positions with P&L
         """
@@ -710,18 +851,40 @@ class CCXTGateway(BaseGateway):
             raise ConnectionError("Not connected")
 
         try:
-            positions = await self._exchange.fetch_positions()
-            return [
-                self._convert_position(p)
-                for p in positions
-                if float(p.get("contracts", 0) or 0) != 0
-            ]
+            # Use fetcher for TET pipeline pattern
+            if self._position_fetcher is None:
+                raise GatewayError("Position fetcher not initialized")
+
+            fetcher_positions = await self._position_fetcher.fetch()
+            return [self._convert_fetcher_position(p) for p in fetcher_positions]
 
         except Exception as e:
             # Some spot exchanges don't support positions
             if "not supported" in str(e).lower():
                 return []
             raise GatewayError(f"Failed to fetch positions: {e}") from e
+
+    def _convert_fetcher_position(self, pos: AccountPosition) -> Position:
+        """Convert fetcher AccountPosition to protocol Position."""
+        side_map = {
+            "long": PositionSide.LONG,
+            "short": PositionSide.SHORT,
+            "flat": PositionSide.FLAT,
+        }
+        return Position(
+            symbol=pos.symbol,
+            side=side_map.get(pos.side.lower(), PositionSide.FLAT),
+            amount=pos.amount,
+            entry_price=pos.entry_price,
+            current_price=pos.current_price,
+            unrealized_pnl=pos.unrealized_pnl,
+            realized_pnl=pos.realized_pnl or Decimal("0"),
+            leverage=pos.leverage,
+            liquidation_price=pos.liquidation_price,
+            margin=pos.margin,
+            margin_type=pos.margin_type,
+            timestamp_ns=pos.timestamp_ns,
+        )
 
     async def get_position(self, symbol: str) -> Position | None:
         """
@@ -739,40 +902,11 @@ class CCXTGateway(BaseGateway):
                 return pos
         return None
 
-    def _convert_position(self, data: dict[str, Any]) -> Position:
-        """Convert CCXT position to Position."""
-        side_str = data.get("side", "long")
-        if side_str == "long":
-            side = PositionSide.LONG
-        elif side_str == "short":
-            side = PositionSide.SHORT
-        else:
-            side = PositionSide.FLAT
-
-        return Position(
-            symbol=data.get("symbol", ""),
-            side=side,
-            amount=Decimal(str(abs(float(data.get("contracts", 0) or 0)))),
-            entry_price=Decimal(str(data.get("entryPrice", 0) or 0)),
-            current_price=Decimal(str(data.get("markPrice", 0) or data.get("entryPrice", 0) or 0)),
-            unrealized_pnl=Decimal(str(data.get("unrealizedPnl", 0) or 0)),
-            realized_pnl=Decimal(str(data.get("realizedPnl", 0) or 0)),
-            leverage=int(data.get("leverage", 1) or 1),
-            liquidation_price=(
-                Decimal(str(data.get("liquidationPrice", 0)))
-                if data.get("liquidationPrice")
-                else None
-            ),
-            margin=Decimal(str(data.get("initialMargin", 0) or 0))
-            if data.get("initialMargin")
-            else None,
-            margin_type=data.get("marginType"),
-            timestamp_ns=int((data.get("timestamp", 0) or time.time() * 1000) * 1_000_000),
-        )
-
     async def get_balances(self) -> dict[str, Balance]:
         """
         Get account balances.
+
+        Uses CCXTBalanceFetcher for TET pipeline (Issue #27).
 
         Returns:
             Dict mapping currency to Balance
@@ -781,22 +915,22 @@ class CCXTGateway(BaseGateway):
             raise ConnectionError("Not connected")
 
         try:
-            data = await self._exchange.fetch_balance()
-            balances: dict[str, Balance] = {}
+            # Use fetcher for TET pipeline pattern
+            if self._balance_fetcher is None:
+                raise GatewayError("Balance fetcher not initialized")
 
-            # CCXT returns balances in a nested structure
-            for currency, info in data.items():
-                if isinstance(info, dict) and "total" in info:
-                    total = Decimal(str(info.get("total", 0) or 0))
-                    if total > 0:
-                        balances[currency] = Balance(
-                            currency=currency,
-                            total=total,
-                            available=Decimal(str(info.get("free", 0) or 0)),
-                            locked=Decimal(str(info.get("used", 0) or 0)),
-                        )
+            fetcher_balances = await self._balance_fetcher.fetch()
 
-            return balances
+            # Convert AccountBalance to protocol Balance
+            return {
+                currency: Balance(
+                    currency=ab.currency,
+                    total=ab.total,
+                    available=ab.available,
+                    locked=ab.locked,
+                )
+                for currency, ab in fetcher_balances.items()
+            }
 
         except Exception as e:
             raise GatewayError(f"Failed to fetch balances: {e}") from e

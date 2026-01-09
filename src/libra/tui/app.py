@@ -41,7 +41,7 @@ from textual.widgets import (
 
 from libra.tui.demo_execution_client import DemoExecutionClient
 from libra.tui.demo_trader import DemoTrader, TradingState as DemoTradingState
-from libra.tui.screens import HelpScreen, OrderEntryResult, OrderEntryScreen
+from libra.tui.screens import HelpScreen, HistoryScreen, OrderEntryResult, OrderEntryScreen
 from libra.tui.screens.strategy_management import (
     StrategyDetailPanel,
     StrategyListPanel,
@@ -193,6 +193,8 @@ class LibraApp(App):
         # Order entry
         Binding("o", "open_order_entry", "Order", id="app.order"),
         Binding("n", "open_order_entry", "New", show=False, id="app.new_order"),
+        # History screen (Issue #27)
+        Binding("H", "open_history", "History", id="app.history"),
         # Command input focus
         Binding("slash", "focus_command", "/Cmd", id="cmd.focus_slash"),
         Binding("colon", "focus_command", ":Cmd", show=False, id="cmd.focus_colon"),
@@ -618,6 +620,10 @@ class LibraApp(App):
     def action_show_help_overlay(self) -> None:
         """Show the help overlay modal (? key)."""
         self.push_screen(HelpScreen())
+
+    def action_open_history(self) -> None:
+        """Open the order/trade history screen (Shift+H key, Issue #27)."""
+        self.push_screen(HistoryScreen(gateway=self.gateway))
 
     def action_open_order_entry(self) -> None:
         """Open the order entry modal (o key)."""

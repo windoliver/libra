@@ -18,6 +18,8 @@ import pytest
 
 from libra.gateways.fetcher import (
     AccountBalance,
+    AccountOrder,
+    AccountPosition,
     BalanceQuery,
     Bar,
     BarQuery,
@@ -27,8 +29,12 @@ from libra.gateways.fetcher import (
     OrderBookLevel,
     OrderBookQuery,
     OrderBookSnapshot,
+    OrderQuery,
+    PositionQuery,
     Quote,
     TickQuery,
+    TradeQuery,
+    TradeRecord,
     fetcher_registry,
     timestamp_to_ns,
 )
@@ -91,6 +97,60 @@ class TestQueryTypes:
         """Test BalanceQuery for specific currency."""
         query = BalanceQuery(currency="USDT")
         assert query.currency == "USDT"
+
+    def test_position_query_all(self) -> None:
+        """Test PositionQuery for all symbols."""
+        query = PositionQuery()
+        assert query.symbol is None
+
+    def test_position_query_specific(self) -> None:
+        """Test PositionQuery for specific symbol."""
+        query = PositionQuery(symbol="BTC/USDT")
+        assert query.symbol == "BTC/USDT"
+
+    def test_order_query_defaults(self) -> None:
+        """Test OrderQuery with defaults."""
+        query = OrderQuery()
+        assert query.symbol is None
+        assert query.order_id is None
+        assert query.status is None
+        assert query.limit is None
+        assert query.since is None
+
+    def test_order_query_full(self) -> None:
+        """Test OrderQuery with all parameters."""
+        since = datetime(2024, 1, 1)
+        query = OrderQuery(
+            symbol="BTC/USDT",
+            order_id="12345",
+            status="open",
+            limit=100,
+            since=since,
+        )
+        assert query.symbol == "BTC/USDT"
+        assert query.order_id == "12345"
+        assert query.status == "open"
+        assert query.limit == 100
+        assert query.since == since
+
+    def test_trade_query_defaults(self) -> None:
+        """Test TradeQuery with defaults."""
+        query = TradeQuery()
+        assert query.symbol is None
+        assert query.limit is None
+        assert query.since is None
+
+    def test_trade_query_full(self) -> None:
+        """Test TradeQuery with all parameters."""
+        since = datetime(2024, 1, 1)
+        query = TradeQuery(
+            symbol="BTC/USDT",
+            limit=100,
+            since=since,
+        )
+        assert query.symbol == "BTC/USDT"
+        assert query.limit == 100
+        assert query.since == since
 
     def test_query_is_frozen(self) -> None:
         """Test that queries are immutable."""
@@ -209,6 +269,140 @@ class TestResponseTypes:
         assert balance.total == Decimal("10000")
         assert balance.available == Decimal("8000")
         assert balance.locked == Decimal("2000")
+
+    def test_account_position(self) -> None:
+        """Test AccountPosition struct creation and properties."""
+        position = AccountPosition(
+            symbol="BTC/USDT",
+            side="long",
+            amount=Decimal("0.5"),
+            entry_price=Decimal("48000"),
+            current_price=Decimal("50000"),
+            unrealized_pnl=Decimal("1000"),
+            leverage=10,
+        )
+        assert position.symbol == "BTC/USDT"
+        assert position.side == "long"
+        assert position.amount == Decimal("0.5")
+        assert position.entry_price == Decimal("48000")
+        assert position.current_price == Decimal("50000")
+        assert position.unrealized_pnl == Decimal("1000")
+        assert position.leverage == 10
+
+    def test_account_position_notional_value(self) -> None:
+        """Test AccountPosition notional value property."""
+        position = AccountPosition(
+            symbol="BTC/USDT",
+            side="long",
+            amount=Decimal("2"),
+            entry_price=Decimal("45000"),
+            current_price=Decimal("50000"),
+            unrealized_pnl=Decimal("10000"),
+        )
+        assert position.notional_value == Decimal("100000")
+
+    def test_account_position_pnl_percent(self) -> None:
+        """Test AccountPosition P&L percentage."""
+        position = AccountPosition(
+            symbol="BTC/USDT",
+            side="long",
+            amount=Decimal("1"),
+            entry_price=Decimal("50000"),
+            current_price=Decimal("55000"),
+            unrealized_pnl=Decimal("5000"),
+        )
+        # 5000 / (1 * 50000) * 100 = 10%
+        assert position.pnl_percent == Decimal("10")
+
+    def test_account_order(self) -> None:
+        """Test AccountOrder struct creation and properties."""
+        order = AccountOrder(
+            order_id="12345",
+            symbol="BTC/USDT",
+            side="buy",
+            order_type="limit",
+            status="filled",
+            amount=Decimal("0.1"),
+            filled=Decimal("0.1"),
+            timestamp_ns=1704067200_000_000_000,
+            price=Decimal("50000"),
+            average=Decimal("49980"),
+        )
+        assert order.order_id == "12345"
+        assert order.symbol == "BTC/USDT"
+        assert order.side == "buy"
+        assert order.order_type == "limit"
+        assert order.status == "filled"
+        assert order.amount == Decimal("0.1")
+        assert order.filled == Decimal("0.1")
+        assert order.price == Decimal("50000")
+        assert order.average == Decimal("49980")
+
+    def test_account_order_is_open(self) -> None:
+        """Test AccountOrder is_open property."""
+        open_order = AccountOrder(
+            order_id="1",
+            symbol="BTC/USDT",
+            side="buy",
+            order_type="limit",
+            status="open",
+            amount=Decimal("1"),
+            filled=Decimal("0"),
+            timestamp_ns=1704067200_000_000_000,
+        )
+        assert open_order.is_open is True
+
+        closed_order = AccountOrder(
+            order_id="2",
+            symbol="BTC/USDT",
+            side="buy",
+            order_type="limit",
+            status="closed",
+            amount=Decimal("1"),
+            filled=Decimal("1"),
+            timestamp_ns=1704067200_000_000_000,
+        )
+        assert closed_order.is_open is False
+
+    def test_account_order_fill_percent(self) -> None:
+        """Test AccountOrder fill percentage."""
+        order = AccountOrder(
+            order_id="1",
+            symbol="BTC/USDT",
+            side="buy",
+            order_type="limit",
+            status="partially_filled",
+            amount=Decimal("10"),
+            filled=Decimal("7.5"),
+            timestamp_ns=1704067200_000_000_000,
+        )
+        assert order.fill_percent == Decimal("75")
+
+    def test_trade_record(self) -> None:
+        """Test TradeRecord struct creation."""
+        trade = TradeRecord(
+            trade_id="T12345",
+            order_id="O12345",
+            symbol="BTC/USDT",
+            side="buy",
+            amount=Decimal("0.1"),
+            price=Decimal("50000"),
+            cost=Decimal("5000"),
+            timestamp_ns=1704067200_000_000_000,
+            fee=Decimal("5"),
+            fee_currency="USDT",
+            taker_or_maker="taker",
+        )
+        assert trade.trade_id == "T12345"
+        assert trade.order_id == "O12345"
+        assert trade.symbol == "BTC/USDT"
+        assert trade.side == "buy"
+        assert trade.amount == Decimal("0.1")
+        assert trade.price == Decimal("50000")
+        assert trade.cost == Decimal("5000")
+        assert trade.fee == Decimal("5")
+        assert trade.fee_currency == "USDT"
+        assert trade.taker_or_maker == "taker"
 
 
 # =============================================================================
@@ -405,6 +599,11 @@ class TestCCXTFetchers:
         exchange.fetch_ticker = AsyncMock()
         exchange.fetch_order_book = AsyncMock()
         exchange.fetch_balance = AsyncMock()
+        exchange.fetch_positions = AsyncMock()
+        exchange.fetch_open_orders = AsyncMock()
+        exchange.fetch_closed_orders = AsyncMock()
+        exchange.fetch_order = AsyncMock()
+        exchange.fetch_my_trades = AsyncMock()
         return exchange
 
     @pytest.mark.asyncio
@@ -537,3 +736,320 @@ class TestCCXTFetchers:
 
         with pytest.raises(ValueError, match="symbol is required"):
             fetcher.transform_query({})
+
+    # =========================================================================
+    # Position Fetcher Tests
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_ccxt_position_fetcher(self, mock_exchange: AsyncMock) -> None:
+        """Test CCXTPositionFetcher with mocked exchange."""
+        from libra.gateways.ccxt_fetchers import CCXTPositionFetcher
+
+        # Setup mock response (CCXT position format)
+        mock_exchange.fetch_positions.return_value = [
+            {
+                "symbol": "BTC/USDT",
+                "side": "long",
+                "contracts": 1.5,
+                "entryPrice": 50000.0,
+                "markPrice": 51000.0,
+                "unrealizedPnl": 1500.0,
+                "leverage": 10,
+                "liquidationPrice": 45000.0,
+                "initialMargin": 7500.0,
+                "marginMode": "cross",
+                "timestamp": 1704067200000,
+            },
+            {
+                "symbol": "ETH/USDT",
+                "side": "short",
+                "contracts": 5.0,
+                "entryPrice": 2500.0,
+                "markPrice": 2400.0,
+                "unrealizedPnl": 500.0,
+                "leverage": 5,
+                "timestamp": 1704067200000,
+            },
+        ]
+
+        fetcher = CCXTPositionFetcher(mock_exchange)
+        positions = await fetcher.fetch()
+
+        assert len(positions) == 2
+        assert positions[0].symbol == "BTC/USDT"
+        assert positions[0].side == "long"
+        assert positions[0].amount == Decimal("1.5")
+        assert positions[0].entry_price == Decimal("50000")
+        assert positions[0].current_price == Decimal("51000")
+        assert positions[0].unrealized_pnl == Decimal("1500")
+        assert positions[0].leverage == 10
+        assert positions[0].liquidation_price == Decimal("45000")
+
+        assert positions[1].symbol == "ETH/USDT"
+        assert positions[1].side == "short"
+        assert positions[1].amount == Decimal("5")
+        mock_exchange.fetch_positions.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ccxt_position_fetcher_specific_symbol(
+        self, mock_exchange: AsyncMock
+    ) -> None:
+        """Test CCXTPositionFetcher with specific symbol filter."""
+        from libra.gateways.ccxt_fetchers import CCXTPositionFetcher
+
+        mock_exchange.fetch_positions.return_value = [
+            {
+                "symbol": "BTC/USDT",
+                "side": "long",
+                "contracts": 1.5,
+                "entryPrice": 50000.0,
+                "markPrice": 51000.0,
+                "unrealizedPnl": 1500.0,
+            },
+        ]
+
+        fetcher = CCXTPositionFetcher(mock_exchange)
+        positions = await fetcher.fetch(symbol="BTC/USDT")
+
+        assert len(positions) == 1
+        assert positions[0].symbol == "BTC/USDT"
+
+    @pytest.mark.asyncio
+    async def test_ccxt_position_fetcher_skips_empty(
+        self, mock_exchange: AsyncMock
+    ) -> None:
+        """Test CCXTPositionFetcher skips empty positions."""
+        from libra.gateways.ccxt_fetchers import CCXTPositionFetcher
+
+        mock_exchange.fetch_positions.return_value = [
+            {
+                "symbol": "BTC/USDT",
+                "side": "long",
+                "contracts": 0,  # Empty position
+                "entryPrice": 50000.0,
+                "markPrice": 51000.0,
+                "unrealizedPnl": 0,
+            },
+            {
+                "symbol": "ETH/USDT",
+                "side": "long",
+                "contracts": 1.0,  # Has position
+                "entryPrice": 2500.0,
+                "markPrice": 2600.0,
+                "unrealizedPnl": 100.0,
+            },
+        ]
+
+        fetcher = CCXTPositionFetcher(mock_exchange)
+        positions = await fetcher.fetch()
+
+        # Should only have ETH position, BTC is filtered out
+        assert len(positions) == 1
+        assert positions[0].symbol == "ETH/USDT"
+
+    # =========================================================================
+    # Order Fetcher Tests
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_ccxt_order_fetcher_open_orders(
+        self, mock_exchange: AsyncMock
+    ) -> None:
+        """Test CCXTOrderFetcher fetching open orders."""
+        from libra.gateways.ccxt_fetchers import CCXTOrderFetcher
+
+        mock_exchange.fetch_open_orders.return_value = [
+            {
+                "id": "12345",
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "type": "limit",
+                "status": "open",
+                "amount": 0.1,
+                "filled": 0.0,
+                "remaining": 0.1,
+                "price": 50000.0,
+                "timestamp": 1704067200000,
+                "fee": {"cost": 0, "currency": "USDT"},
+            },
+        ]
+
+        fetcher = CCXTOrderFetcher(mock_exchange)
+        orders = await fetcher.fetch(status="open")
+
+        assert len(orders) == 1
+        assert orders[0].order_id == "12345"
+        assert orders[0].symbol == "BTC/USDT"
+        assert orders[0].side == "buy"
+        assert orders[0].order_type == "limit"
+        assert orders[0].status == "open"
+        assert orders[0].amount == Decimal("0.1")
+        assert orders[0].filled == Decimal("0")
+        assert orders[0].price == Decimal("50000")
+        mock_exchange.fetch_open_orders.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ccxt_order_fetcher_closed_orders(
+        self, mock_exchange: AsyncMock
+    ) -> None:
+        """Test CCXTOrderFetcher fetching closed orders."""
+        from libra.gateways.ccxt_fetchers import CCXTOrderFetcher
+
+        mock_exchange.fetch_closed_orders.return_value = [
+            {
+                "id": "12346",
+                "symbol": "BTC/USDT",
+                "side": "sell",
+                "type": "market",
+                "status": "closed",
+                "amount": 0.5,
+                "filled": 0.5,
+                "remaining": 0,
+                "average": 51000.0,
+                "timestamp": 1704067200000,
+                "fee": {"cost": 2.55, "currency": "USDT"},
+            },
+        ]
+
+        fetcher = CCXTOrderFetcher(mock_exchange)
+        orders = await fetcher.fetch(status="closed")
+
+        assert len(orders) == 1
+        assert orders[0].order_id == "12346"
+        assert orders[0].status == "closed"
+        assert orders[0].filled == Decimal("0.5")
+        assert orders[0].average == Decimal("51000")
+        assert orders[0].fee == Decimal("2.55")
+        assert orders[0].fee_currency == "USDT"
+        mock_exchange.fetch_closed_orders.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ccxt_order_fetcher_specific_order(
+        self, mock_exchange: AsyncMock
+    ) -> None:
+        """Test CCXTOrderFetcher fetching specific order by ID."""
+        from libra.gateways.ccxt_fetchers import CCXTOrderFetcher
+
+        mock_exchange.fetch_order.return_value = {
+            "id": "12345",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "type": "limit",
+            "status": "filled",
+            "amount": 1.0,
+            "filled": 1.0,
+            "remaining": 0,
+            "price": 50000.0,
+            "average": 49990.0,
+            "timestamp": 1704067200000,
+        }
+
+        fetcher = CCXTOrderFetcher(mock_exchange)
+        orders = await fetcher.fetch(order_id="12345", symbol="BTC/USDT")
+
+        assert len(orders) == 1
+        assert orders[0].order_id == "12345"
+        mock_exchange.fetch_order.assert_called_once_with("12345", "BTC/USDT")
+
+    @pytest.mark.asyncio
+    async def test_ccxt_order_fetcher_with_since(
+        self, mock_exchange: AsyncMock
+    ) -> None:
+        """Test CCXTOrderFetcher with since filter."""
+        from libra.gateways.ccxt_fetchers import CCXTOrderFetcher
+
+        mock_exchange.fetch_open_orders.return_value = []
+
+        fetcher = CCXTOrderFetcher(mock_exchange)
+        since = datetime(2024, 1, 1)
+        await fetcher.fetch(status="open", since=since)
+
+        # Verify since was converted to milliseconds
+        call_args = mock_exchange.fetch_open_orders.call_args
+        assert call_args.kwargs["since"] == int(since.timestamp() * 1000)
+
+    # =========================================================================
+    # Trade Fetcher Tests
+    # =========================================================================
+
+    @pytest.mark.asyncio
+    async def test_ccxt_trade_fetcher(self, mock_exchange: AsyncMock) -> None:
+        """Test CCXTTradeFetcher with mocked exchange."""
+        from libra.gateways.ccxt_fetchers import CCXTTradeFetcher
+
+        mock_exchange.fetch_my_trades.return_value = [
+            {
+                "id": "T12345",
+                "order": "O12345",
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "amount": 0.1,
+                "price": 50000.0,
+                "cost": 5000.0,
+                "timestamp": 1704067200000,
+                "fee": {"cost": 5.0, "currency": "USDT"},
+                "takerOrMaker": "taker",
+            },
+            {
+                "id": "T12346",
+                "order": "O12346",
+                "symbol": "BTC/USDT",
+                "side": "sell",
+                "amount": 0.05,
+                "price": 51000.0,
+                "cost": 2550.0,
+                "timestamp": 1704070800000,
+                "fee": {"cost": 2.55, "currency": "USDT"},
+                "takerOrMaker": "maker",
+            },
+        ]
+
+        fetcher = CCXTTradeFetcher(mock_exchange)
+        trades = await fetcher.fetch(symbol="BTC/USDT", limit=100)
+
+        assert len(trades) == 2
+
+        assert trades[0].trade_id == "T12345"
+        assert trades[0].order_id == "O12345"
+        assert trades[0].symbol == "BTC/USDT"
+        assert trades[0].side == "buy"
+        assert trades[0].amount == Decimal("0.1")
+        assert trades[0].price == Decimal("50000")
+        assert trades[0].cost == Decimal("5000")
+        assert trades[0].fee == Decimal("5")
+        assert trades[0].fee_currency == "USDT"
+        assert trades[0].taker_or_maker == "taker"
+
+        assert trades[1].trade_id == "T12346"
+        assert trades[1].side == "sell"
+        assert trades[1].taker_or_maker == "maker"
+        mock_exchange.fetch_my_trades.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ccxt_trade_fetcher_with_since(
+        self, mock_exchange: AsyncMock
+    ) -> None:
+        """Test CCXTTradeFetcher with since filter."""
+        from libra.gateways.ccxt_fetchers import CCXTTradeFetcher
+
+        mock_exchange.fetch_my_trades.return_value = []
+
+        fetcher = CCXTTradeFetcher(mock_exchange)
+        since = datetime(2024, 1, 1)
+        await fetcher.fetch(symbol="BTC/USDT", since=since, limit=50)
+
+        # Verify since was converted to milliseconds
+        call_args = mock_exchange.fetch_my_trades.call_args
+        assert call_args.kwargs["since"] == int(since.timestamp() * 1000)
+        assert call_args.kwargs["limit"] == 50
+
+    def test_global_registry_has_new_fetchers(self) -> None:
+        """Test global registry has new CCXT fetchers registered."""
+        # Import to trigger registration
+        from libra.gateways import ccxt_fetchers  # noqa: F401
+
+        data_types = fetcher_registry.list_data_types("ccxt")
+        assert "position" in data_types
+        assert "order" in data_types
+        assert "trade" in data_types

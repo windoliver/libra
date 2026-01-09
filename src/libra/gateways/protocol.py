@@ -728,6 +728,40 @@ class Gateway(Protocol):
         """
         ...
 
+    async def get_order_history(
+        self, symbol: str | None = None, limit: int | None = None
+    ) -> list[OrderResult]:
+        """
+        Get order history (open and closed orders).
+
+        Uses TET pipeline with CCXTOrderFetcher (Issue #27).
+
+        Args:
+            symbol: Optional symbol to filter.
+            limit: Maximum number of orders to return.
+
+        Returns:
+            List of OrderResults sorted by timestamp descending.
+        """
+        ...
+
+    async def get_trades(
+        self, symbol: str | None = None, limit: int | None = None
+    ) -> list:
+        """
+        Get trade/fill history.
+
+        Uses TET pipeline with CCXTTradeFetcher (Issue #27).
+
+        Args:
+            symbol: Optional symbol to filter.
+            limit: Maximum number of trades to return.
+
+        Returns:
+            List of TradeRecord objects sorted by timestamp descending.
+        """
+        ...
+
     # -------------------------------------------------------------------------
     # Account
     # -------------------------------------------------------------------------
@@ -901,6 +935,20 @@ class BaseGateway(ABC):
     @abstractmethod
     async def get_open_orders(self, symbol: str | None = None) -> list[OrderResult]:
         """Get open orders."""
+        ...
+
+    @abstractmethod
+    async def get_order_history(
+        self, symbol: str | None = None, limit: int | None = None
+    ) -> list[OrderResult]:
+        """Get order history (Issue #27)."""
+        ...
+
+    @abstractmethod
+    async def get_trades(
+        self, symbol: str | None = None, limit: int | None = None
+    ) -> list:
+        """Get trade/fill history (Issue #27)."""
         ...
 
     @abstractmethod

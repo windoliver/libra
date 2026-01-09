@@ -38,6 +38,8 @@ from typing import TYPE_CHECKING, Any
 
 from libra.gateways.fetcher import (
     AccountBalance,
+    AccountOrder,
+    AccountPosition,
     BalanceQuery,
     Bar,
     BarQuery,
@@ -45,8 +47,12 @@ from libra.gateways.fetcher import (
     OrderBookLevel,
     OrderBookQuery,
     OrderBookSnapshot,
+    OrderQuery,
+    PositionQuery,
     Quote,
     TickQuery,
+    TradeQuery,
+    TradeRecord,
     fetcher_registry,
     timestamp_to_ns,
 )
@@ -384,6 +390,366 @@ class CCXTBalanceFetcher(GatewayFetcher[BalanceQuery, dict[str, AccountBalance]]
 
 
 # =============================================================================
+# CCXT Position Fetcher
+# =============================================================================
+
+
+class CCXTPositionFetcher(GatewayFetcher[PositionQuery, list[AccountPosition]]):
+    """
+    Fetcher for account positions via CCXT.
+
+    Transforms CCXT positions to standard AccountPosition format.
+    Works with exchanges that support futures/derivatives trading.
+
+    Example:
+        fetcher = CCXTPositionFetcher(exchange)
+        positions = await fetcher.fetch()
+        for pos in positions:
+            print(f"{pos.symbol}: {pos.side} {pos.amount} @ {pos.entry_price}")
+
+        # Get specific symbol
+        positions = await fetcher.fetch(symbol="BTC/USDT")
+    """
+
+    def __init__(self, exchange: Any) -> None:
+        """Initialize with CCXT exchange."""
+        self._exchange = exchange
+
+    def transform_query(self, params: dict[str, Any]) -> PositionQuery:
+        """Transform params to PositionQuery."""
+        return PositionQuery(
+            symbol=params.get("symbol"),
+        )
+
+    async def extract_data(self, query: PositionQuery, **_kwargs: Any) -> Any:
+        """Fetch raw position data from CCXT."""
+        symbols = [query.symbol] if query.symbol else None
+        return await self._exchange.fetch_positions(symbols)
+
+    def transform_data(
+        self, query: PositionQuery, raw: Any
+    ) -> list[AccountPosition]:
+        """
+        Transform CCXT positions to standard format.
+
+        CCXT position format:
+        {
+            "symbol": "BTC/USDT",
+            "side": "long" or "short",
+            "contracts": 1.5,
+            "entryPrice": 50000.0,
+            "markPrice": 51000.0,
+            "unrealizedPnl": 1500.0,
+            "leverage": 10,
+            "liquidationPrice": 45000.0,
+            ...
+        }
+        """
+        positions = []
+
+        for pos in raw:
+            # Skip empty positions
+            contracts = pos.get("contracts", 0) or 0
+            if contracts == 0:
+                continue
+
+            # Filter by symbol if specified
+            symbol = pos.get("symbol", "")
+            if query.symbol and symbol != query.symbol:
+                continue
+
+            # Determine side
+            side = pos.get("side", "flat")
+            if not side:
+                # Infer from contracts sign or notional
+                notional = pos.get("notional", 0) or 0
+                side = "long" if notional >= 0 else "short"
+
+            # Calculate unrealized PnL if not provided
+            unrealized_pnl = pos.get("unrealizedPnl", 0) or 0
+
+            positions.append(
+                AccountPosition(
+                    symbol=symbol,
+                    side=side.lower(),
+                    amount=Decimal(str(abs(contracts))),
+                    entry_price=Decimal(str(pos.get("entryPrice", 0) or 0)),
+                    current_price=Decimal(str(pos.get("markPrice", 0) or 0)),
+                    unrealized_pnl=Decimal(str(unrealized_pnl)),
+                    timestamp_ns=timestamp_to_ns(pos.get("timestamp", 0) or 0),
+                    leverage=int(pos.get("leverage", 1) or 1),
+                    liquidation_price=Decimal(str(pos.get("liquidationPrice", 0)))
+                    if pos.get("liquidationPrice")
+                    else None,
+                    margin=Decimal(str(pos.get("initialMargin", 0) or 0))
+                    if pos.get("initialMargin")
+                    else None,
+                    margin_type=pos.get("marginMode") or pos.get("marginType"),
+                    realized_pnl=Decimal(str(pos.get("realizedPnl", 0)))
+                    if pos.get("realizedPnl") is not None
+                    else None,
+                )
+            )
+
+        return positions
+
+
+# =============================================================================
+# CCXT Order Fetcher
+# =============================================================================
+
+
+class CCXTOrderFetcher(GatewayFetcher[OrderQuery, list[AccountOrder]]):
+    """
+    Fetcher for orders via CCXT.
+
+    Transforms CCXT orders to standard AccountOrder format.
+    Supports fetching open orders, closed orders, or all orders.
+
+    Example:
+        fetcher = CCXTOrderFetcher(exchange)
+
+        # Get open orders
+        open_orders = await fetcher.fetch(status="open")
+
+        # Get order history for a symbol
+        orders = await fetcher.fetch(symbol="BTC/USDT", status="closed", limit=50)
+
+        # Get specific order
+        orders = await fetcher.fetch(order_id="12345", symbol="BTC/USDT")
+    """
+
+    def __init__(self, exchange: Any) -> None:
+        """Initialize with CCXT exchange."""
+        self._exchange = exchange
+
+    def transform_query(self, params: dict[str, Any]) -> OrderQuery:
+        """Transform params to OrderQuery."""
+        return OrderQuery(
+            symbol=params.get("symbol"),
+            order_id=params.get("order_id"),
+            status=params.get("status", "all"),
+            limit=params.get("limit"),
+            since=params.get("since"),
+        )
+
+    async def extract_data(self, query: OrderQuery, **_kwargs: Any) -> Any:
+        """Fetch raw order data from CCXT."""
+        since = None
+        if query.since:
+            since = int(query.since.timestamp() * 1000)
+
+        # If order_id is specified, fetch single order
+        if query.order_id and query.symbol:
+            order = await self._exchange.fetch_order(query.order_id, query.symbol)
+            return [order]
+
+        # Fetch based on status
+        if query.status == "open":
+            return await self._exchange.fetch_open_orders(
+                symbol=query.symbol,
+                since=since,
+                limit=query.limit,
+            )
+        elif query.status == "closed":
+            return await self._exchange.fetch_closed_orders(
+                symbol=query.symbol,
+                since=since,
+                limit=query.limit,
+            )
+        else:
+            # Fetch all orders (combine open + closed)
+            orders = []
+            try:
+                open_orders = await self._exchange.fetch_open_orders(
+                    symbol=query.symbol,
+                    since=since,
+                    limit=query.limit,
+                )
+                orders.extend(open_orders)
+            except Exception:
+                pass
+
+            try:
+                closed_orders = await self._exchange.fetch_closed_orders(
+                    symbol=query.symbol,
+                    since=since,
+                    limit=query.limit,
+                )
+                orders.extend(closed_orders)
+            except Exception:
+                pass
+
+            return orders
+
+    def transform_data(
+        self, query: OrderQuery, raw: Any
+    ) -> list[AccountOrder]:
+        """
+        Transform CCXT orders to standard format.
+
+        CCXT order format:
+        {
+            "id": "12345",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "type": "limit",
+            "status": "open",
+            "amount": 0.1,
+            "filled": 0.0,
+            "remaining": 0.1,
+            "price": 50000.0,
+            "average": None,
+            "timestamp": 1704067200000,
+            "fee": {"cost": 0.0001, "currency": "BTC"},
+            ...
+        }
+        """
+        orders = []
+
+        for order in raw:
+            # Extract fee info
+            fee_info = order.get("fee") or {}
+            fee = fee_info.get("cost")
+            fee_currency = fee_info.get("currency")
+
+            orders.append(
+                AccountOrder(
+                    order_id=str(order.get("id", "")),
+                    symbol=order.get("symbol", ""),
+                    side=order.get("side", "").lower(),
+                    order_type=order.get("type", "").lower(),
+                    status=order.get("status", "").lower(),
+                    amount=Decimal(str(order.get("amount", 0) or 0)),
+                    filled=Decimal(str(order.get("filled", 0) or 0)),
+                    timestamp_ns=timestamp_to_ns(order.get("timestamp", 0) or 0),
+                    price=Decimal(str(order.get("price", 0)))
+                    if order.get("price")
+                    else None,
+                    average=Decimal(str(order.get("average", 0)))
+                    if order.get("average")
+                    else None,
+                    remaining=Decimal(str(order.get("remaining", 0)))
+                    if order.get("remaining") is not None
+                    else None,
+                    cost=Decimal(str(order.get("cost", 0)))
+                    if order.get("cost")
+                    else None,
+                    fee=Decimal(str(fee)) if fee is not None else None,
+                    fee_currency=fee_currency,
+                    client_order_id=order.get("clientOrderId"),
+                    stop_price=Decimal(str(order.get("stopPrice", 0)))
+                    if order.get("stopPrice")
+                    else None,
+                    time_in_force=order.get("timeInForce"),
+                    reduce_only=order.get("reduceOnly", False) or False,
+                    post_only=order.get("postOnly", False) or False,
+                )
+            )
+
+        return orders
+
+
+# =============================================================================
+# CCXT Trade Fetcher
+# =============================================================================
+
+
+class CCXTTradeFetcher(GatewayFetcher[TradeQuery, list[TradeRecord]]):
+    """
+    Fetcher for trade history via CCXT.
+
+    Transforms CCXT trades to standard TradeRecord format.
+    Returns individual trade/fill records.
+
+    Example:
+        fetcher = CCXTTradeFetcher(exchange)
+
+        # Get recent trades for a symbol
+        trades = await fetcher.fetch(symbol="BTC/USDT", limit=100)
+        for trade in trades:
+            print(f"{trade.side} {trade.amount} @ {trade.price}")
+
+        # Get trades since a specific time
+        trades = await fetcher.fetch(
+            symbol="BTC/USDT",
+            since=datetime(2024, 1, 1),
+        )
+    """
+
+    def __init__(self, exchange: Any) -> None:
+        """Initialize with CCXT exchange."""
+        self._exchange = exchange
+
+    def transform_query(self, params: dict[str, Any]) -> TradeQuery:
+        """Transform params to TradeQuery."""
+        return TradeQuery(
+            symbol=params.get("symbol"),
+            limit=params.get("limit"),
+            since=params.get("since"),
+        )
+
+    async def extract_data(self, query: TradeQuery, **_kwargs: Any) -> Any:
+        """Fetch raw trade data from CCXT."""
+        since = None
+        if query.since:
+            since = int(query.since.timestamp() * 1000)
+
+        return await self._exchange.fetch_my_trades(
+            symbol=query.symbol,
+            since=since,
+            limit=query.limit,
+        )
+
+    def transform_data(
+        self, query: TradeQuery, raw: Any
+    ) -> list[TradeRecord]:
+        """
+        Transform CCXT trades to standard format.
+
+        CCXT trade format:
+        {
+            "id": "T12345",
+            "order": "O12345",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "amount": 0.1,
+            "price": 50000.0,
+            "cost": 5000.0,
+            "timestamp": 1704067200000,
+            "fee": {"cost": 0.0001, "currency": "BTC"},
+            "takerOrMaker": "taker",
+            ...
+        }
+        """
+        trades = []
+
+        for trade in raw:
+            # Extract fee info
+            fee_info = trade.get("fee") or {}
+            fee = fee_info.get("cost")
+            fee_currency = fee_info.get("currency")
+
+            trades.append(
+                TradeRecord(
+                    trade_id=str(trade.get("id", "")),
+                    order_id=str(trade.get("order", "")),
+                    symbol=trade.get("symbol", ""),
+                    side=trade.get("side", "").lower(),
+                    amount=Decimal(str(trade.get("amount", 0) or 0)),
+                    price=Decimal(str(trade.get("price", 0) or 0)),
+                    cost=Decimal(str(trade.get("cost", 0) or 0)),
+                    timestamp_ns=timestamp_to_ns(trade.get("timestamp", 0) or 0),
+                    fee=Decimal(str(fee)) if fee is not None else None,
+                    fee_currency=fee_currency,
+                    taker_or_maker=trade.get("takerOrMaker"),
+                )
+            )
+
+        return trades
+
+
+# =============================================================================
 # Register Fetchers
 # =============================================================================
 
@@ -394,6 +760,9 @@ def register_ccxt_fetchers() -> None:
     fetcher_registry.register("ccxt", "quote", CCXTQuoteFetcher)
     fetcher_registry.register("ccxt", "orderbook", CCXTOrderBookFetcher)
     fetcher_registry.register("ccxt", "balance", CCXTBalanceFetcher)
+    fetcher_registry.register("ccxt", "position", CCXTPositionFetcher)
+    fetcher_registry.register("ccxt", "order", CCXTOrderFetcher)
+    fetcher_registry.register("ccxt", "trade", CCXTTradeFetcher)
 
 
 # Auto-register on import

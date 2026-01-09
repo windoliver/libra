@@ -354,6 +354,137 @@ class AccountBalance(msgspec.Struct, frozen=True, gc=False):
     locked: Decimal
 
 
+class AccountPosition(msgspec.Struct, frozen=True, gc=False):
+    """
+    Account position for a single symbol.
+
+    Represents an open position with P&L tracking.
+
+    Examples:
+        position = AccountPosition(
+            symbol="BTC/USDT",
+            side="long",
+            amount=Decimal("0.5"),
+            entry_price=Decimal("48000.00"),
+            current_price=Decimal("50000.00"),
+            unrealized_pnl=Decimal("1000.00"),
+            leverage=1,
+        )
+    """
+
+    symbol: str
+    side: str  # "long", "short", "flat"
+    amount: Decimal  # Position size (always positive)
+    entry_price: Decimal  # Average entry price
+    current_price: Decimal  # Current mark price
+    unrealized_pnl: Decimal  # Unrealized profit/loss
+    timestamp_ns: int | None = None  # Last update time
+    leverage: int = 1  # Leverage multiplier
+    liquidation_price: Decimal | None = None  # Liquidation price (derivatives)
+    margin: Decimal | None = None  # Margin used
+    margin_type: str | None = None  # "cross" or "isolated"
+    realized_pnl: Decimal | None = None  # Realized profit/loss
+
+    @property
+    def notional_value(self) -> Decimal:
+        """Position notional value (amount * current_price)."""
+        return self.amount * self.current_price
+
+    @property
+    def pnl_percent(self) -> Decimal:
+        """P&L as percentage of entry value."""
+        entry_value = self.amount * self.entry_price
+        if entry_value == 0:
+            return Decimal("0")
+        return (self.unrealized_pnl / entry_value) * 100
+
+
+class AccountOrder(msgspec.Struct, frozen=True, gc=False):
+    """
+    Order record from exchange.
+
+    Represents an order (open or historical) with fill information.
+
+    Examples:
+        order = AccountOrder(
+            order_id="12345",
+            symbol="BTC/USDT",
+            side="buy",
+            order_type="limit",
+            status="filled",
+            amount=Decimal("0.1"),
+            filled=Decimal("0.1"),
+            price=Decimal("50000"),
+            average=Decimal("49980"),
+            timestamp_ns=time.time_ns(),
+        )
+    """
+
+    order_id: str
+    symbol: str
+    side: str  # "buy", "sell"
+    order_type: str  # "market", "limit", "stop", etc.
+    status: str  # "open", "closed", "canceled"
+    amount: Decimal  # Original order amount
+    filled: Decimal  # Amount filled
+    timestamp_ns: int  # Order creation time
+    price: Decimal | None = None  # Limit price
+    average: Decimal | None = None  # Average fill price
+    remaining: Decimal | None = None  # Remaining amount
+    cost: Decimal | None = None  # Total cost (filled * average)
+    fee: Decimal | None = None  # Fee amount
+    fee_currency: str | None = None  # Fee currency
+    client_order_id: str | None = None  # Client order ID
+    stop_price: Decimal | None = None  # Stop trigger price
+    time_in_force: str | None = None  # "GTC", "IOC", "FOK", etc.
+    reduce_only: bool = False  # Only reduce position
+    post_only: bool = False  # Only maker orders
+
+    @property
+    def is_open(self) -> bool:
+        """Check if order is still open."""
+        return self.status in ("open", "partially_filled")
+
+    @property
+    def fill_percent(self) -> Decimal:
+        """Percentage of order filled (0-100)."""
+        if self.amount == 0:
+            return Decimal("0")
+        return (self.filled / self.amount) * 100
+
+
+class TradeRecord(msgspec.Struct, frozen=True, gc=False):
+    """
+    Trade/fill record from exchange.
+
+    Represents an individual trade execution.
+
+    Examples:
+        trade = TradeRecord(
+            trade_id="T12345",
+            order_id="O12345",
+            symbol="BTC/USDT",
+            side="buy",
+            amount=Decimal("0.1"),
+            price=Decimal("50000"),
+            cost=Decimal("5000"),
+            timestamp_ns=time.time_ns(),
+        )
+    """
+
+    trade_id: str
+    order_id: str
+    symbol: str
+    side: str  # "buy", "sell"
+    amount: Decimal  # Trade amount
+    price: Decimal  # Trade price
+    cost: Decimal  # Total cost (amount * price)
+    timestamp_ns: int  # Trade execution time
+    fee: Decimal | None = None  # Fee amount
+    fee_currency: str | None = None  # Fee currency
+    taker_or_maker: str | None = None  # "taker" or "maker"
+
+
 # =============================================================================
 # Fetcher Protocol & Abstract Base Class
 # =============================================================================

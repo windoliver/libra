@@ -26,6 +26,9 @@ from libra.tui.screens.backtest_modal import (
     run_demo_backtest,
 )
 
+# History Screen (Issue #27)
+from libra.tui.screens.history import HistoryScreen
+
 
 __all__ = [
     # Help
@@ -49,4 +52,6 @@ __all__ = [
     "BacktestResult",
     "BacktestResultsModal",
     "run_demo_backtest",
+    # History (Issue #27)
+    "HistoryScreen",
 ]

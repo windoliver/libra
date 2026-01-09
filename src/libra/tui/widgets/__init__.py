@@ -104,6 +104,13 @@ from libra.tui.widgets.backtest_dashboard import (
     create_demo_backtest_results,
 )
 
+# Order/Fill History (Issue #27)
+from libra.tui.widgets.order_history import (
+    FillHistoryTable,
+    OrderHistoryTable,
+    OrderStatusFilter,
+)
+
 
 __all__ = [
     # Algorithm Monitor (Issue #36)
@@ -188,4 +195,8 @@ __all__ = [
     "BacktestResultsScreen",
     "convert_from_backtest_result",
     "create_demo_backtest_results",
+    # Order/Fill History (Issue #27)
+    "FillHistoryTable",
+    "OrderHistoryTable",
+    "OrderStatusFilter",
 ]
