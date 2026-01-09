@@ -119,6 +119,37 @@ from libra.tui.widgets.signal_log import (
     create_demo_signals,
 )
 
+# Observability Widgets (Issue #25)
+from libra.tui.widgets.metrics_dashboard import (
+    CounterPanel,
+    GaugePanel,
+    HistogramPanel,
+    MetricCard,
+    MetricData,
+    MetricsDashboard,
+    MetricsDashboardData,
+    create_demo_metrics_data,
+)
+from libra.tui.widgets.trace_viewer import (
+    SpanData,
+    SpanDetailPanel,
+    SpanTreePanel,
+    TraceData,
+    TraceListPanel,
+    TraceViewer,
+    create_demo_trace_data,
+)
+from libra.tui.widgets.health_monitor import (
+    ComponentHealthData,
+    ComponentHealthTable,
+    HealthMonitorWidget,
+    HealthStatusBadge,
+    ResourceGauge,
+    SystemHealthData,
+    SystemResourcesPanel,
+    create_demo_health_data,
+)
+
 
 __all__ = [
     # Algorithm Monitor (Issue #36)
@@ -212,4 +243,28 @@ __all__ = [
     "SignalType",
     "StrategySignalLog",
     "create_demo_signals",
+    # Observability Widgets (Issue #25)
+    "CounterPanel",
+    "GaugePanel",
+    "HistogramPanel",
+    "MetricCard",
+    "MetricData",
+    "MetricsDashboard",
+    "MetricsDashboardData",
+    "create_demo_metrics_data",
+    "SpanData",
+    "SpanDetailPanel",
+    "SpanTreePanel",
+    "TraceData",
+    "TraceListPanel",
+    "TraceViewer",
+    "create_demo_trace_data",
+    "ComponentHealthData",
+    "ComponentHealthTable",
+    "HealthMonitorWidget",
+    "HealthStatusBadge",
+    "ResourceGauge",
+    "SystemHealthData",
+    "SystemResourcesPanel",
+    "create_demo_health_data",
 ]

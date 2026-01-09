@@ -64,6 +64,13 @@ from libra.tui.widgets import (
     StrategyTree,
     create_demo_backtest_results,
     create_demo_positions,
+    # Observability widgets (Issue #25)
+    MetricsDashboard,
+    TraceViewer,
+    HealthMonitorWidget,
+    create_demo_metrics_data,
+    create_demo_trace_data,
+    create_demo_health_data,
 )
 from libra.tui.screens.position_detail import (
     ClosePositionModal,
@@ -213,7 +220,8 @@ class LibraApp(App):
         Binding("5", "switch_tab('strategies')", show=False, id="tab.5"),
         Binding("6", "switch_tab('portfolio')", show=False, id="tab.6"),
         Binding("7", "switch_tab('backtest')", show=False, id="tab.7"),
-        Binding("8", "switch_tab('settings')", show=False, id="tab.8"),
+        Binding("8", "switch_tab('observability')", show=False, id="tab.8"),
+        Binding("9", "switch_tab('settings')", show=False, id="tab.9"),
     ]
 
     def __init__(
@@ -318,6 +326,13 @@ class LibraApp(App):
                         id="backtest-dashboard",
                     )
 
+            # Observability tab (Issue #25)
+            with TabPane("Observe", id="observability"):
+                with VerticalScroll():
+                    yield HealthMonitorWidget(id="health-monitor")
+                    yield Rule()
+                    yield MetricsDashboard(id="metrics-dashboard")
+
             with TabPane("Settings", id="settings"):
                 with VerticalScroll():
                     yield Static("Settings", classes="panel-title")
@@ -393,6 +408,7 @@ class LibraApp(App):
         self.set_interval(2.0, self._update_positions)
         self.set_interval(1.0, self._update_risk_dashboard)
         self.set_interval(5.0, self._maybe_auto_trade)  # Auto trades every 5s
+        self.set_interval(2.0, self._update_observability)  # Observability updates (Issue #25)
 
     def _setup_live_mode(self) -> None:
         """Setup for live trading mode."""
@@ -1063,6 +1079,24 @@ class LibraApp(App):
 
             # Also sync balance
             self._sync_balance_from_demo()
+        except Exception:
+            pass
+
+    def _update_observability(self) -> None:
+        """Update observability widgets with demo data (Issue #25)."""
+        try:
+            # Update health monitor
+            health_monitor = self.query_one("#health-monitor", HealthMonitorWidget)
+            health_data = create_demo_health_data()
+            health_monitor.update_health(health_data)
+        except Exception:
+            pass
+
+        try:
+            # Update metrics dashboard
+            metrics_dashboard = self.query_one("#metrics-dashboard", MetricsDashboard)
+            metrics_data = create_demo_metrics_data()
+            metrics_dashboard.update_from_collector(metrics_data)
         except Exception:
             pass
 
