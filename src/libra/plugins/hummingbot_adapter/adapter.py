@@ -8,6 +8,10 @@ Supported strategies:
 - Avellaneda-Stoikov optimal market making
 - Pure market making
 - Cross-exchange market making (XEMM)
+
+Features:
+- DEX gateway support (Uniswap V2/V3)
+- Comprehensive performance tracking
 """
 
 from __future__ import annotations
@@ -22,6 +26,10 @@ from libra.plugins.base import PluginMetadata, StrategyPlugin
 from libra.plugins.hummingbot_adapter.config import (
     HummingbotAdapterConfig,
     StrategyType,
+)
+from libra.plugins.hummingbot_adapter.performance import (
+    PerformanceStats,
+    PerformanceTracker,
 )
 from libra.plugins.hummingbot_adapter.strategies.avellaneda import (
     AvellanedaStoikovStrategy,
@@ -65,8 +73,13 @@ class HummingbotAdapter(StrategyPlugin):
 
     VERSION = "0.1.0"
 
-    def __init__(self) -> None:
-        """Initialize the adapter."""
+    def __init__(self, enable_performance_tracking: bool = True) -> None:
+        """
+        Initialize the adapter.
+
+        Args:
+            enable_performance_tracking: Whether to enable P&L and trade tracking
+        """
         self._config: HummingbotAdapterConfig | None = None
         self._initialized = False
         self._symbols: list[str] = []
@@ -80,6 +93,10 @@ class HummingbotAdapter(StrategyPlugin):
         self._last_quote: Quote | TwoSidedOrder | None = None
         self._last_signal_time_ns: int = 0
         self._pending_orders: list[dict[str, Any]] = []
+
+        # Performance tracking
+        self._performance_tracking_enabled = enable_performance_tracking
+        self._performance_tracker: PerformanceTracker | None = None
 
     @classmethod
     def metadata(cls) -> PluginMetadata:
@@ -111,6 +128,9 @@ class HummingbotAdapter(StrategyPlugin):
         Args:
             config: Configuration dictionary
         """
+        # Extract initial_capital before parsing config (not part of strategy config)
+        initial_capital = Decimal(str(config.pop("initial_capital", 100000)))
+
         # Parse configuration
         self._config = HummingbotAdapterConfig.from_dict(config)
         self._config.validate()
@@ -141,6 +161,12 @@ class HummingbotAdapter(StrategyPlugin):
                 config=self._config.xemm,
                 min_spread=self._config.min_spread,
                 max_spread=self._config.max_spread,
+            )
+
+        # Initialize performance tracker
+        if self._performance_tracking_enabled:
+            self._performance_tracker = PerformanceTracker(
+                initial_capital=initial_capital,
             )
 
         self._initialized = True
@@ -393,6 +419,41 @@ class HummingbotAdapter(StrategyPlugin):
 
         return stats
 
+    def get_performance_stats(self) -> PerformanceStats | None:
+        """
+        Get comprehensive performance statistics.
+
+        Returns:
+            PerformanceStats with P&L, trade stats, and risk metrics,
+            or None if performance tracking is disabled.
+        """
+        if self._performance_tracker is None:
+            return None
+        return self._performance_tracker.get_stats()
+
+    def get_performance_summary(self) -> dict[str, Any] | None:
+        """
+        Get performance summary as dictionary.
+
+        Returns:
+            Dictionary with equity, positions, P&L, and key statistics,
+            or None if performance tracking is disabled.
+        """
+        if self._performance_tracker is None:
+            return None
+        return self._performance_tracker.to_dict()
+
+    def update_price(self, symbol: str, price: Decimal) -> None:
+        """
+        Update market price for performance tracking.
+
+        Args:
+            symbol: Trading symbol
+            price: Current market price
+        """
+        if self._performance_tracker:
+            self._performance_tracker.update_price(symbol, price)
+
     async def shutdown(self) -> None:
         """Shutdown the adapter and clean up resources."""
         # Reset all strategies
@@ -402,6 +463,10 @@ class HummingbotAdapter(StrategyPlugin):
             self._pure_mm.reset()
         if self._xemm:
             self._xemm.reset()
+
+        # Reset performance tracker
+        if self._performance_tracker:
+            self._performance_tracker.reset()
 
         self._last_quote = None
         self._pending_orders.clear()

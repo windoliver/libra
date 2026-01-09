@@ -42,9 +42,15 @@ ccxt = [
     "ccxt>=4.0",
 ]
 
+# Web3 - DEX connectivity for Hummingbot adapter (Issue #12)
+web3 = [
+    "web3>=6.0",              # Web3.py for Ethereum interaction
+    "eth-account>=0.11",      # Account management
+]
+
 # All optional plugins (convenience install)
 all-plugins = [
-    "libra[ccxt,freqtrade,tui,database,api]",
+    "libra[ccxt,freqtrade,tui,database,api,web3]",
 ]
 
 # TUI - Terminal User Interface (v4.0+ required for Markdown streaming)
