@@ -544,6 +544,9 @@ class BaseExecAlgorithm(ABC):
         else:
             self._metrics.avg_execution_price = price
 
+        # Also update progress avg_fill_price for consistency
+        self._progress.avg_fill_price = self._metrics.avg_execution_price
+
         self._metrics.num_orders += 1
 
     # -------------------------------------------------------------------------
