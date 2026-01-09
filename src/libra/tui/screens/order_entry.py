@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Grid, Horizontal, Vertical
+from textual.containers import Container, Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -57,6 +57,8 @@ class OrderEntryResult:
         order_type: str = "MARKET",
         quantity: Decimal = Decimal("0"),
         price: Decimal | None = None,
+        exec_algorithm: str | None = None,
+        exec_algorithm_params: dict | None = None,
     ) -> None:
         self.submitted = submitted
         self.symbol = symbol
@@ -64,6 +66,186 @@ class OrderEntryResult:
         self.order_type = order_type
         self.quantity = quantity
         self.price = price
+        # Execution algorithm fields (Issue #36)
+        self.exec_algorithm = exec_algorithm
+        self.exec_algorithm_params = exec_algorithm_params or {}
+
+
+# =============================================================================
+# Risk Preview Widget
+# =============================================================================
+
+
+# =============================================================================
+# Algorithm Parameters Widget
+# =============================================================================
+
+
+class AlgorithmParams(Static):
+    """
+    Collapsible algorithm parameters panel.
+
+    Shows configuration options for execution algorithms.
+    Pre-creates all parameter fields and shows/hides based on selection.
+    """
+
+    DEFAULT_CSS = """
+    AlgorithmParams {
+        height: auto;
+        padding: 1;
+        background: $surface-darken-1;
+        border: round $primary-darken-2;
+        margin-top: 1;
+        display: none;
+    }
+
+    AlgorithmParams.visible {
+        display: block;
+    }
+
+    AlgorithmParams .algo-title {
+        text-style: bold;
+        color: $primary;
+        margin-bottom: 1;
+    }
+
+    AlgorithmParams .algo-section {
+        display: none;
+    }
+
+    AlgorithmParams .algo-section.active {
+        display: block;
+    }
+
+    AlgorithmParams .algo-row {
+        height: 3;
+        margin-bottom: 0;
+    }
+
+    AlgorithmParams .algo-label {
+        width: 15;
+        height: 3;
+        content-align: left middle;
+        color: $text-muted;
+    }
+
+    AlgorithmParams Input {
+        width: 1fr;
+    }
+
+    AlgorithmParams .algo-hint {
+        color: $text-muted;
+        text-style: italic;
+        margin-top: 1;
+    }
+    """
+
+    # Algorithm parameter definitions
+    ALGO_PARAMS = {
+        "twap": [
+            ("horizon_secs", "Duration (s)", "300"),
+            ("interval_secs", "Interval (s)", "30"),
+        ],
+        "vwap": [
+            ("num_intervals", "Intervals", "12"),
+            ("max_participation_pct", "Max Part %", "0.05"),
+        ],
+        "iceberg": [
+            ("display_pct", "Display %", "0.10"),
+            ("randomize_display", "Randomize", "1"),
+        ],
+        "pov": [
+            ("target_pct", "Target %", "0.05"),
+            ("max_pct", "Max %", "0.20"),
+        ],
+    }
+
+    ALGO_HINTS = {
+        "twap": "TWAP: Splits order evenly over time",
+        "vwap": "VWAP: Follows historical volume pattern",
+        "iceberg": "Iceberg: Hides total order size",
+        "pov": "POV: Matches market volume rate",
+    }
+
+    def __init__(self, id: str = "algo-params") -> None:
+        super().__init__(id=id)
+        self._current_algo: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("ALGORITHM PARAMETERS", classes="algo-title")
+
+        # Pre-create all algorithm parameter sections
+        for algo, params in self.ALGO_PARAMS.items():
+            with Container(id=f"section-{algo}", classes="algo-section"):
+                for param_id, label_text, default in params:
+                    with Horizontal(classes="algo-row"):
+                        yield Label(f"{label_text}:", classes="algo-label")
+                        yield Input(value=default, id=f"algo-{algo}-{param_id}")
+
+        yield Static("", id="algo-hint", classes="algo-hint")
+
+    def set_algorithm(self, algo: str | None) -> None:
+        """Update the parameters panel for the selected algorithm."""
+        self._current_algo = algo
+
+        if not algo or algo == "none":
+            self.remove_class("visible")
+            # Hide all sections
+            for section_algo in self.ALGO_PARAMS:
+                try:
+                    section = self.query_one(f"#section-{section_algo}", Container)
+                    section.remove_class("active")
+                except Exception:
+                    pass
+            return
+
+        self.add_class("visible")
+
+        # Show only the selected algorithm's section
+        for section_algo in self.ALGO_PARAMS:
+            try:
+                section = self.query_one(f"#section-{section_algo}", Container)
+                if section_algo == algo:
+                    section.add_class("active")
+                else:
+                    section.remove_class("active")
+            except Exception:
+                pass
+
+        # Update hint
+        try:
+            hint_widget = self.query_one("#algo-hint", Static)
+            hint_widget.update(self.ALGO_HINTS.get(algo, ""))
+        except Exception:
+            pass
+
+    def get_params(self) -> dict:
+        """Get current parameter values."""
+        params = {}
+
+        if not self._current_algo:
+            return params
+
+        param_defs = self.ALGO_PARAMS.get(self._current_algo, [])
+
+        for param_id, _, default in param_defs:
+            try:
+                input_widget = self.query_one(f"#algo-{self._current_algo}-{param_id}", Input)
+                value = input_widget.value or default
+
+                # Convert to appropriate type
+                if param_id in ("horizon_secs", "interval_secs", "num_intervals"):
+                    params[param_id] = float(value)
+                elif param_id in ("max_participation_pct", "display_pct", "target_pct", "max_pct"):
+                    params[param_id] = float(value)
+                elif param_id == "randomize_display":
+                    params[param_id] = value in ("1", "true", "True", "yes")
+                else:
+                    params[param_id] = value
+            except Exception:
+                pass
+
+        return params
 
 
 # =============================================================================
@@ -220,6 +402,11 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
         width: 100%;
     }
 
+    OrderEntryScreen VerticalScroll {
+        height: auto;
+        max-height: 100%;
+    }
+
     OrderEntryScreen .form-row {
         height: 3;
         margin-bottom: 1;
@@ -321,76 +508,98 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
         self._selected_type: str = "LIMIT"
         self._quantity: Decimal = Decimal("0")
         self._price: Decimal | None = None
+        self._selected_algorithm: str | None = None  # Execution algorithm
 
     def compose(self) -> ComposeResult:
         """Create the order entry form layout."""
         with Container():
             yield Static("NEW ORDER", classes="modal-title")
 
-            # Symbol selection
-            with Horizontal(classes="form-row"):
-                yield Label("Symbol:", classes="form-label")
-                with Container(classes="form-input"):
-                    yield Select(
-                        [(s, s) for s in self._symbols],
-                        value=self._selected_symbol,
-                        id="symbol-select",
-                    )
+            # Scrollable form content
+            with VerticalScroll():
+                # Symbol selection
+                with Horizontal(classes="form-row"):
+                    yield Label("Symbol:", classes="form-label")
+                    with Container(classes="form-input"):
+                        yield Select(
+                            [(s, s) for s in self._symbols],
+                            value=self._selected_symbol,
+                            id="symbol-select",
+                        )
 
-            # Side selection (BUY/SELL)
-            with Horizontal(classes="form-row"):
-                yield Label("Side:", classes="form-label")
-                with Container(classes="form-input"):
-                    with RadioSet(id="side-radio"):
-                        yield RadioButton("BUY", id="side-buy", value=True)
-                        yield RadioButton("SELL", id="side-sell")
+                # Side selection (BUY/SELL)
+                with Horizontal(classes="form-row"):
+                    yield Label("Side:", classes="form-label")
+                    with Container(classes="form-input"):
+                        with RadioSet(id="side-radio"):
+                            yield RadioButton("BUY", id="side-buy", value=True)
+                            yield RadioButton("SELL", id="side-sell")
 
-            # Order type selection
-            with Horizontal(classes="form-row"):
-                yield Label("Type:", classes="form-label")
-                with Container(classes="form-input"):
-                    yield Select(
-                        [
-                            ("MARKET", "MARKET"),
-                            ("LIMIT", "LIMIT"),
-                            ("STOP_LIMIT", "STOP_LIMIT"),
-                        ],
-                        value="LIMIT",
-                        id="type-select",
-                    )
+                # Order type selection
+                with Horizontal(classes="form-row"):
+                    yield Label("Type:", classes="form-label")
+                    with Container(classes="form-input"):
+                        yield Select(
+                            [
+                                ("MARKET", "MARKET"),
+                                ("LIMIT", "LIMIT"),
+                                ("STOP_LIMIT", "STOP_LIMIT"),
+                            ],
+                            value="LIMIT",
+                            id="type-select",
+                        )
 
-            # Quantity input
-            with Horizontal(classes="form-row"):
-                yield Label("Quantity:", classes="form-label")
-                with Container(classes="form-input"):
-                    yield Input(
-                        placeholder="0.00000000",
-                        id="quantity-input",
-                    )
+                # Quantity input
+                with Horizontal(classes="form-row"):
+                    yield Label("Quantity:", classes="form-label")
+                    with Container(classes="form-input"):
+                        yield Input(
+                            placeholder="0.00000000",
+                            id="quantity-input",
+                        )
 
-            # USD equivalent display
-            with Horizontal():
-                yield Label("", classes="form-label")
-                yield Static("", id="usd-equivalent", classes="usd-equivalent")
+                # USD equivalent display
+                with Horizontal():
+                    yield Label("", classes="form-label")
+                    yield Static("", id="usd-equivalent", classes="usd-equivalent")
 
-            # Price input (for LIMIT orders)
-            with Horizontal(classes="form-row"):
-                yield Label("Price:", classes="form-label")
-                with Container(classes="form-input"):
-                    yield Input(
-                        placeholder="Enter price",
-                        id="price-input",
-                    )
+                # Price input (for LIMIT orders)
+                with Horizontal(classes="form-row"):
+                    yield Label("Price:", classes="form-label")
+                    with Container(classes="form-input"):
+                        yield Input(
+                            placeholder="Enter price",
+                            id="price-input",
+                        )
 
-            # Current market price reference
-            with Horizontal():
-                yield Label("", classes="form-label")
-                yield Static("", id="market-price", classes="price-info")
+                # Current market price reference
+                with Horizontal():
+                    yield Label("", classes="form-label")
+                    yield Static("", id="market-price", classes="price-info")
 
-            # Risk preview panel
-            yield RiskPreview()
+                # Execution algorithm selection (Issue #36)
+                with Horizontal(classes="form-row"):
+                    yield Label("Algorithm:", classes="form-label")
+                    with Container(classes="form-input"):
+                        yield Select(
+                            [
+                                ("None (Direct)", "none"),
+                                ("TWAP", "twap"),
+                                ("VWAP", "vwap"),
+                                ("Iceberg", "iceberg"),
+                                ("POV", "pov"),
+                            ],
+                            value="none",
+                            id="algo-select",
+                        )
 
-            # Action buttons
+                # Algorithm parameters panel (hidden by default)
+                yield AlgorithmParams()
+
+                # Risk preview panel
+                yield RiskPreview()
+
+            # Action buttons - OUTSIDE scroll so always visible
             with Horizontal(classes="button-row"):
                 yield Button("Cancel (Esc)", id="cancel-btn", variant="error")
                 yield Button("Submit Order (Ctrl+Enter)", id="submit-btn", variant="success")
@@ -416,6 +625,16 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
             self._selected_type = str(event.value) if event.value else "LIMIT"
             self._update_price_field_visibility()
             self._update_risk_preview()
+
+        elif event.select.id == "algo-select":
+            algo = str(event.value) if event.value else "none"
+            self._selected_algorithm = None if algo == "none" else algo
+            # Update algorithm parameters panel
+            try:
+                algo_params = self.query_one(AlgorithmParams)
+                algo_params.set_algorithm(self._selected_algorithm)
+            except Exception:
+                pass
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         """Handle side selection change."""
@@ -583,7 +802,16 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
             self.notify("Please enter a price for limit orders", severity="error")
             return
 
-        # Create result
+        # Get algorithm parameters if algorithm is selected
+        algo_params: dict | None = None
+        if self._selected_algorithm:
+            try:
+                algo_widget = self.query_one(AlgorithmParams)
+                algo_params = algo_widget.get_params()
+            except Exception:
+                algo_params = {}
+
+        # Create result with execution algorithm info
         result = OrderEntryResult(
             submitted=True,
             symbol=self._selected_symbol,
@@ -591,6 +819,8 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
             order_type=self._selected_type,
             quantity=self._quantity,
             price=self._price,
+            exec_algorithm=self._selected_algorithm,
+            exec_algorithm_params=algo_params,
         )
 
         self.dismiss(result)

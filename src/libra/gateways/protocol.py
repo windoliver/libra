@@ -114,6 +114,16 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             stop_price=Decimal("1950.00"),
             time_in_force=TimeInForce.GTC,
         )
+
+        # Order with TWAP execution algorithm
+        order = Order(
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            amount=Decimal("100.0"),
+            exec_algorithm="twap",
+            exec_algorithm_params={"horizon_secs": 300, "interval_secs": 30},
+        )
     """
 
     # Required fields
@@ -133,6 +143,11 @@ class Order(msgspec.Struct, frozen=True, gc=False):
     leverage: int | None = None  # Leverage for derivatives
     timestamp_ns: int | None = None  # Creation time (nanoseconds)
 
+    # Execution algorithm fields (Issue #36)
+    exec_algorithm: str | None = None  # Algorithm name: "twap", "vwap", "iceberg", "pov"
+    exec_algorithm_params: dict[str, Any] | None = None  # Algorithm-specific config
+    parent_order_id: str | None = None  # For child orders spawned by algorithms
+
     def with_id(self, order_id: str) -> Order:
         """Return new Order with exchange-assigned ID."""
         return Order(
@@ -149,6 +164,9 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             post_only=self.post_only,
             leverage=self.leverage,
             timestamp_ns=self.timestamp_ns,
+            exec_algorithm=self.exec_algorithm,
+            exec_algorithm_params=self.exec_algorithm_params,
+            parent_order_id=self.parent_order_id,
         )
 
     def with_timestamp(self) -> Order:
@@ -167,7 +185,45 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             post_only=self.post_only,
             leverage=self.leverage,
             timestamp_ns=time.time_ns(),
+            exec_algorithm=self.exec_algorithm,
+            exec_algorithm_params=self.exec_algorithm_params,
+            parent_order_id=self.parent_order_id,
         )
+
+    def with_exec_algorithm(
+        self,
+        algorithm: str,
+        params: dict[str, Any] | None = None,
+    ) -> Order:
+        """Return new Order with execution algorithm specified."""
+        return Order(
+            symbol=self.symbol,
+            side=self.side,
+            order_type=self.order_type,
+            amount=self.amount,
+            id=self.id,
+            client_order_id=self.client_order_id,
+            price=self.price,
+            stop_price=self.stop_price,
+            time_in_force=self.time_in_force,
+            reduce_only=self.reduce_only,
+            post_only=self.post_only,
+            leverage=self.leverage,
+            timestamp_ns=self.timestamp_ns,
+            exec_algorithm=algorithm,
+            exec_algorithm_params=params,
+            parent_order_id=self.parent_order_id,
+        )
+
+    @property
+    def is_algo_order(self) -> bool:
+        """Check if this order should use an execution algorithm."""
+        return self.exec_algorithm is not None
+
+    @property
+    def is_child_order(self) -> bool:
+        """Check if this is a child order spawned by an algorithm."""
+        return self.parent_order_id is not None
 
 
 class OrderResult(msgspec.Struct, frozen=True, gc=False):

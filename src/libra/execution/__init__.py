@@ -10,6 +10,7 @@ Algorithms Available:
 - TWAP: Time-Weighted Average Price (equal slices over time)
 - VWAP: Volume-Weighted Average Price (slices proportional to volume)
 - Iceberg: Hidden orders showing only visible portion
+- POV: Percentage of Volume (participation rate)
 
 Quick Start:
     from libra.execution import create_algorithm
@@ -29,6 +30,20 @@ Quick Start:
     config = TWAPConfig(horizon_secs=120, interval_secs=10)
     twap = TWAPAlgorithm(config, execution_client=client)
 
+    # Use ExecutionEngine for algorithm-based order routing
+    from libra.execution import ExecutionEngine
+
+    engine = ExecutionEngine(message_bus=bus, clock=clock, execution_client=client)
+    order = Order(
+        symbol="BTC/USDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        amount=Decimal("100"),
+        exec_algorithm="twap",
+        exec_algorithm_params={"horizon_secs": 300},
+    )
+    progress = await engine.submit_order(order)
+
 References:
 - NautilusTrader: https://nautilustrader.io/docs/nightly/concepts/execution/
 - QuantConnect Lean: VolumeWeightedAveragePriceExecutionModel
@@ -44,11 +59,49 @@ from libra.execution.algorithm import (
     ExecutionProgress,
 )
 
+# Adaptive execution features
+from libra.execution.adaptive import (
+    AdaptiveConfig,
+    AdaptiveMixin,
+    AdaptiveState,
+    MarketConditions,
+    UrgencyLevel,
+    create_adaptive_config,
+    urgency_from_level,
+)
+
+# Execution Engine
+from libra.execution.engine import (
+    ActiveExecution,
+    AlgorithmExecutionError,
+    AlgorithmNotFoundError,
+    ExecutionEngine,
+    ExecutionEngineConfig,
+    ExecutionEngineStats,
+    OrderDeniedError,
+    create_execution_engine,
+)
+
 # Iceberg algorithm
 from libra.execution.iceberg import (
     IcebergAlgorithm,
     IcebergConfig,
     create_iceberg,
+)
+
+# TCA Metrics
+from libra.execution.metrics import (
+    AggregatedTCA,
+    ExecutionTCA,
+    FillRecord,
+    create_tca,
+)
+
+# POV algorithm
+from libra.execution.pov import (
+    POVAlgorithm,
+    POVConfig,
+    create_pov,
 )
 
 # Registry for algorithm discovery
@@ -83,6 +136,15 @@ __all__ = [
     "ChildOrder",
     "ExecutionProgress",
     "ExecutionMetrics",
+    # Execution Engine
+    "ExecutionEngine",
+    "ExecutionEngineConfig",
+    "ExecutionEngineStats",
+    "ActiveExecution",
+    "OrderDeniedError",
+    "AlgorithmNotFoundError",
+    "AlgorithmExecutionError",
+    "create_execution_engine",
     # TWAP
     "TWAPAlgorithm",
     "TWAPConfig",
@@ -96,6 +158,23 @@ __all__ = [
     "IcebergAlgorithm",
     "IcebergConfig",
     "create_iceberg",
+    # POV
+    "POVAlgorithm",
+    "POVConfig",
+    "create_pov",
+    # Adaptive
+    "AdaptiveMixin",
+    "AdaptiveConfig",
+    "AdaptiveState",
+    "MarketConditions",
+    "UrgencyLevel",
+    "create_adaptive_config",
+    "urgency_from_level",
+    # TCA Metrics
+    "ExecutionTCA",
+    "AggregatedTCA",
+    "FillRecord",
+    "create_tca",
     # Registry
     "AlgorithmRegistry",
     "get_algorithm_registry",

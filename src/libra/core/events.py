@@ -47,6 +47,18 @@ class EventType(Enum):
     POSITION_CLOSED = auto()
     POSITION_UPDATED = auto()
 
+    # Execution Algorithms (Priority: ORDERS) - Issue #36
+    ALGO_STARTED = auto()  # Execution algorithm started
+    ALGO_PROGRESS = auto()  # Progress update (periodic)
+    ALGO_COMPLETED = auto()  # Execution algorithm completed successfully
+    ALGO_CANCELLED = auto()  # Execution algorithm cancelled
+    ALGO_FAILED = auto()  # Execution algorithm failed
+    ALGO_PAUSED = auto()  # Execution algorithm paused
+    ALGO_RESUMED = auto()  # Execution algorithm resumed
+    CHILD_ORDER_SPAWNED = auto()  # Child order created by algorithm
+    CHILD_ORDER_SUBMITTED = auto()  # Child order submitted to exchange
+    CHILD_ORDER_FILLED = auto()  # Child order filled
+
     # Risk (Priority: RISK - highest)
     RISK_LIMIT_BREACH = auto()
     DRAWDOWN_WARNING = auto()
@@ -103,6 +115,17 @@ EVENT_PRIORITY_MAP: dict[EventType, Priority] = {
     EventType.POSITION_OPENED: Priority.ORDERS,
     EventType.POSITION_CLOSED: Priority.ORDERS,
     EventType.POSITION_UPDATED: Priority.ORDERS,
+    # Execution Algorithm events (Issue #36)
+    EventType.ALGO_STARTED: Priority.ORDERS,
+    EventType.ALGO_PROGRESS: Priority.ORDERS,
+    EventType.ALGO_COMPLETED: Priority.ORDERS,
+    EventType.ALGO_CANCELLED: Priority.ORDERS,
+    EventType.ALGO_FAILED: Priority.RISK,  # Algorithm failures are high priority
+    EventType.ALGO_PAUSED: Priority.ORDERS,
+    EventType.ALGO_RESUMED: Priority.ORDERS,
+    EventType.CHILD_ORDER_SPAWNED: Priority.ORDERS,
+    EventType.CHILD_ORDER_SUBMITTED: Priority.ORDERS,
+    EventType.CHILD_ORDER_FILLED: Priority.ORDERS,
     # Signal events
     EventType.SIGNAL: Priority.SIGNALS,
     # Market data events - lowest priority (highest volume)

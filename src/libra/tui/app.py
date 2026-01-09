@@ -39,6 +39,7 @@ from textual.widgets import (
     TabPane,
 )
 
+from libra.tui.demo_execution_client import DemoExecutionClient
 from libra.tui.demo_trader import DemoTrader, TradingState as DemoTradingState
 from libra.tui.screens import HelpScreen, OrderEntryResult, OrderEntryScreen
 from libra.tui.screens.strategy_management import (
@@ -46,6 +47,8 @@ from libra.tui.screens.strategy_management import (
     StrategyListPanel,
 )
 from libra.tui.widgets import (
+    AlgorithmExecutionData,
+    AlgorithmMonitor,
     BacktestResultsDashboard,
     BalanceDisplay,
     CommandInput,
@@ -225,6 +228,10 @@ class LibraApp(App):
         # Demo trading engine
         self.demo_trader = DemoTrader()
 
+        # Demo execution client and engine (Issue #36)
+        self._demo_execution_client: DemoExecutionClient | None = None
+        self._execution_engine = None  # Lazy import to avoid circular deps
+
         # Legacy price references (for backward compatibility)
         self._btc_price = Decimal("51250.00")
         self._eth_price = Decimal("3045.00")
@@ -272,6 +279,9 @@ class LibraApp(App):
 
             with TabPane("Orders", id="orders"):
                 with VerticalScroll():
+                    # Algorithm executions monitor (Issue #36)
+                    yield AlgorithmMonitor(id="algo-monitor")
+                    yield Rule()
                     yield Static("Order History", classes="panel-title")
                     yield Rule()
                     yield Static("[dim]No pending orders[/dim]", id="orders-placeholder")
@@ -366,6 +376,9 @@ class LibraApp(App):
         self.demo_trader.on_trade = self._on_demo_trade
         self.demo_trader.on_risk_event = self._on_demo_risk_event
 
+        # Initialize execution engine with demo client (Issue #36)
+        self._setup_execution_engine()
+
         self._throttled_notify(
             "Demo Mode Active - Trade with simulated funds",
             title="Welcome to LIBRA",
@@ -392,6 +405,119 @@ class LibraApp(App):
 
         self.set_interval(2.0, self._refresh_account_data)
         self.set_interval(1.0, self._refresh_status)
+
+    def _setup_execution_engine(self) -> None:
+        """Initialize the execution engine for algorithm-based orders (Issue #36)."""
+        try:
+            from libra.execution import create_execution_engine
+
+            # Create demo execution client wrapping demo trader
+            self._demo_execution_client = DemoExecutionClient(self.demo_trader)
+
+            # Create execution engine
+            self._execution_engine = create_execution_engine(
+                execution_client=self._demo_execution_client,
+                enable_risk_checks=False,  # Demo mode doesn't need risk checks
+            )
+
+            self.query_one(LogViewer).log_message(
+                "Execution engine initialized (TWAP, VWAP, Iceberg, POV available)",
+                "debug",
+            )
+        except Exception as e:
+            self.query_one(LogViewer).log_message(
+                f"Failed to initialize execution engine: {e}",
+                "warning",
+            )
+            self._execution_engine = None
+
+    def _execute_with_algorithm(self, result: OrderEntryResult, log: LogViewer) -> None:
+        """Execute an order using an execution algorithm (Issue #36)."""
+        import asyncio
+        from libra.gateways.protocol import Order, OrderSide, OrderType
+
+        # Build the order
+        side = OrderSide.BUY if result.side == "BUY" else OrderSide.SELL
+        order_type = OrderType.MARKET if result.order_type == "MARKET" else OrderType.LIMIT
+
+        order = Order(
+            symbol=result.symbol,
+            side=side,
+            order_type=order_type,
+            amount=result.quantity,
+            price=result.price,
+            exec_algorithm=result.exec_algorithm,
+            exec_algorithm_params=result.exec_algorithm_params,
+        )
+
+        algo_name = result.exec_algorithm.upper() if result.exec_algorithm else "UNKNOWN"
+        log.log_message(
+            f"Starting {algo_name} execution: {result.side} {result.quantity} {result.symbol}",
+            "info",
+        )
+
+        # Update algorithm monitor widget if present
+        try:
+            monitor = self.query_one("#algo-monitor", AlgorithmMonitor)
+            monitor.update_execution(AlgorithmExecutionData(
+                execution_id=order.client_order_id or f"{result.symbol}-algo",
+                algorithm=result.exec_algorithm or "unknown",
+                symbol=result.symbol,
+                side=result.side,
+                total_quantity=result.quantity,
+                state="RUNNING",
+            ))
+        except Exception:
+            pass
+
+        async def run_algo():
+            try:
+                progress = await self._execution_engine.submit_order(order)
+
+                # Log completion
+                if progress and hasattr(progress, 'state'):
+                    state = progress.state.value if hasattr(progress.state, 'value') else str(progress.state)
+                    log.log_message(
+                        f"{algo_name} execution {state}: "
+                        f"Filled {progress.executed_quantity}/{progress.total_quantity}",
+                        "success" if state == "completed" else "warning",
+                    )
+
+                    # Update monitor
+                    try:
+                        monitor = self.query_one("#algo-monitor", AlgorithmMonitor)
+                        monitor.update_execution(AlgorithmExecutionData(
+                            execution_id=order.client_order_id or f"{result.symbol}-algo",
+                            algorithm=result.exec_algorithm or "unknown",
+                            symbol=result.symbol,
+                            side=result.side,
+                            total_quantity=progress.total_quantity,
+                            filled_quantity=progress.executed_quantity,
+                            state=state.upper(),
+                            total_slices=progress.num_children_spawned,
+                            completed_slices=progress.num_children_filled,
+                            average_price=progress.avg_fill_price,
+                        ))
+                    except Exception:
+                        pass
+
+                    self._throttled_notify(
+                        f"{algo_name} {result.side} {result.quantity} {result.symbol}",
+                        title=f"Algo {state.title()}",
+                        severity="information",
+                        timeout=3,
+                    )
+            except Exception as e:
+                log.log_message(f"{algo_name} execution failed: {e}", "error")
+                self._throttled_notify(
+                    f"{algo_name} failed: {e}",
+                    title="Algorithm Error",
+                    severity="error",
+                    timeout=5,
+                )
+
+        # Run the algorithm in the background
+        asyncio.create_task(run_algo())
 
     # =========================================================================
     # Alert Throttling (Prevent Alarm Fatigue)
@@ -512,25 +638,31 @@ class LibraApp(App):
 
             # Execute via DemoTrader if in demo mode
             if self.demo_mode:
-                success, msg = self.demo_trader.execute_order(
-                    symbol=result.symbol,
-                    side=result.side,
-                    quantity=result.quantity,
-                    price=result.price,
-                )
-
-                if success:
-                    icon = ICON_UP if result.side == "BUY" else ICON_DOWN
-                    log.log_message(f"{icon} {msg}", "success")
-                    self._throttled_notify(
-                        f"{result.side} {result.quantity} {result.symbol}",
-                        title="Order Executed",
-                        severity="information",
-                        timeout=3,
-                    )
+                # Check if execution algorithm is specified (Issue #36)
+                if result.exec_algorithm and self._execution_engine is not None:
+                    # Route through ExecutionEngine for algorithm execution
+                    self._execute_with_algorithm(result, log)
                 else:
-                    log.log_message(f"ORDER REJECTED: {msg}", "error")
-                    self._throttled_notify(msg, title="Order Rejected", severity="error", timeout=5)
+                    # Direct execution through DemoTrader
+                    success, msg = self.demo_trader.execute_order(
+                        symbol=result.symbol,
+                        side=result.side,
+                        quantity=result.quantity,
+                        price=result.price,
+                    )
+
+                    if success:
+                        icon = ICON_UP if result.side == "BUY" else ICON_DOWN
+                        log.log_message(f"{icon} {msg}", "success")
+                        self._throttled_notify(
+                            f"{result.side} {result.quantity} {result.symbol}",
+                            title="Order Executed",
+                            severity="information",
+                            timeout=3,
+                        )
+                    else:
+                        log.log_message(f"ORDER REJECTED: {msg}", "error")
+                        self._throttled_notify(msg, title="Order Rejected", severity="error", timeout=5)
             else:
                 # Live mode - just log (would send to gateway)
                 log.log_message(

@@ -9,6 +9,12 @@ All widgets follow Textual best practices:
 - Proper message passing for events
 """
 
+# Algorithm Monitor (Issue #36)
+from libra.tui.widgets.algo_monitor import (
+    AlgorithmExecutionData,
+    AlgorithmMonitor,
+    ExecutionCard,
+)
 from libra.tui.widgets.balance_display import BalanceDisplay
 from libra.tui.widgets.command_input import CommandInput
 from libra.tui.widgets.log_viewer import LogViewer
@@ -100,6 +106,10 @@ from libra.tui.widgets.backtest_dashboard import (
 
 
 __all__ = [
+    # Algorithm Monitor (Issue #36)
+    "AlgorithmExecutionData",
+    "AlgorithmMonitor",
+    "ExecutionCard",
     # Balance & Position
     "BalanceDisplay",
     "PositionDisplay",

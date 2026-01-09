@@ -171,6 +171,12 @@ class AlgorithmRegistry:
             config = IcebergConfig(**config_kwargs)
             return algorithm_class(config=config, execution_client=execution_client)
 
+        elif name == "pov" and config_kwargs:
+            from libra.execution.pov import POVConfig
+
+            config = POVConfig(**config_kwargs)
+            return algorithm_class(config=config, execution_client=execution_client)
+
         # Generic instantiation for algorithms without config
         return algorithm_class(execution_client=execution_client)
 
@@ -195,6 +201,7 @@ class AlgorithmRegistry:
 def _create_default_registry() -> AlgorithmRegistry:
     """Create and populate the default algorithm registry."""
     from libra.execution.iceberg import IcebergAlgorithm
+    from libra.execution.pov import POVAlgorithm
     from libra.execution.twap import TWAPAlgorithm
     from libra.execution.vwap import VWAPAlgorithm
 
@@ -202,6 +209,7 @@ def _create_default_registry() -> AlgorithmRegistry:
     registry.register("twap", TWAPAlgorithm)
     registry.register("vwap", VWAPAlgorithm)
     registry.register("iceberg", IcebergAlgorithm)
+    registry.register("pov", POVAlgorithm)
 
     return registry
 
