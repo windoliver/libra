@@ -82,6 +82,12 @@ from libra.gateways.protocol import (
     RateLimitError,
     Tick,
     TimeInForce,
+    # Capabilities (Issue #24)
+    ContingencyType,
+    GatewayCapabilities,
+    TriggerType,
+    CCXT_DEFAULT_CAPABILITIES,
+    PAPER_GATEWAY_CAPABILITIES,
     # Serialization
     decode_order,
     decode_order_result,

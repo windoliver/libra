@@ -35,6 +35,65 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
+# =============================================================================
+# Strategy Types (Issue #24 - Extensible Protocol Design)
+# =============================================================================
+
+
+class StrategyType(str, Enum):
+    """
+    Strategy execution modes.
+
+    Inspired by QuantConnect Lean, Zipline, and NautilusTrader patterns.
+
+    Modes:
+    - EVENT_DRIVEN: Reacts to market events (on_bar, on_tick)
+    - SCHEDULED: Runs on time-based schedule (cron, intervals)
+    - VECTORIZED: Batch processing for backtesting efficiency
+    - HYBRID: Combination of event-driven and scheduled
+
+    Examples:
+        class MyStrategy(BaseStrategy):
+            strategy_type = StrategyType.EVENT_DRIVEN
+
+        class RebalanceStrategy(BaseStrategy):
+            strategy_type = StrategyType.SCHEDULED
+            schedule = "0 9 * * MON"  # Every Monday 9am
+    """
+
+    EVENT_DRIVEN = "event_driven"  # on_bar, on_tick handlers
+    SCHEDULED = "scheduled"  # time-based execution (cron/interval)
+    VECTORIZED = "vectorized"  # batch processing (backtest optimization)
+    HYBRID = "hybrid"  # combination of event-driven and scheduled
+
+
+class DateRule(str, Enum):
+    """
+    Date rules for scheduled execution.
+
+    Based on Zipline's schedule_function API.
+    """
+
+    EVERY_DAY = "every_day"
+    WEEK_START = "week_start"  # Monday
+    WEEK_END = "week_end"  # Friday
+    MONTH_START = "month_start"  # First trading day
+    MONTH_END = "month_end"  # Last trading day
+
+
+class TimeRule(str, Enum):
+    """
+    Time rules for scheduled execution.
+
+    Based on Zipline's schedule_function API.
+    """
+
+    MARKET_OPEN = "market_open"
+    MARKET_CLOSE = "market_close"
+    EVERY_MINUTE = "every_minute"
+    EVERY_HOUR = "every_hour"
+
+
 class SignalType(str, Enum):
     """
     Trading signal types.
@@ -586,6 +645,43 @@ class StrategyConfig:
     timeframe: str = "1h"  # Default timeframe
     max_position_size: Decimal = Decimal("1.0")  # Max position as decimal
     risk_per_trade: Decimal = Decimal("0.02")  # 2% risk per trade
+
+    # Strategy type (Issue #24)
+    strategy_type: StrategyType = StrategyType.EVENT_DRIVEN
+
+
+# =============================================================================
+# Scheduled Task (Issue #24 - Extensible Protocol Design)
+# =============================================================================
+
+
+@dataclass
+class ScheduledTask:
+    """
+    Represents a scheduled task for time-based strategy execution.
+
+    Based on Zipline's schedule_function pattern.
+
+    Attributes:
+        func_name: Name of the method to call
+        date_rule: When to run (daily, weekly, monthly)
+        time_rule: What time to run (market open, close, etc.)
+        offset_minutes: Offset from time_rule in minutes
+
+    Examples:
+        # Rebalance at market open every Monday
+        task = ScheduledTask(
+            func_name="rebalance",
+            date_rule=DateRule.WEEK_START,
+            time_rule=TimeRule.MARKET_OPEN,
+            offset_minutes=30,  # 30 min after open
+        )
+    """
+
+    func_name: str
+    date_rule: DateRule = DateRule.EVERY_DAY
+    time_rule: TimeRule = TimeRule.MARKET_OPEN
+    offset_minutes: int = 0
 
 
 # =============================================================================

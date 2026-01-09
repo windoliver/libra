@@ -43,7 +43,9 @@ from libra.gateways.protocol import (
     AuthenticationError,
     Balance,
     BaseGateway,
+    CCXT_DEFAULT_CAPABILITIES,
     ConnectionError,
+    GatewayCapabilities,
     GatewayError,
     InsufficientFundsError,
     Order,
@@ -947,6 +949,20 @@ class CCXTGateway(BaseGateway):
         """
         balances = await self.get_balances()
         return balances.get(currency)
+
+    # -------------------------------------------------------------------------
+    # Capabilities (Issue #24)
+    # -------------------------------------------------------------------------
+
+    @property
+    def capabilities(self) -> GatewayCapabilities:
+        """
+        Get gateway capabilities.
+
+        Returns CCXT default capabilities. For exchange-specific features,
+        check self._exchange.has dict directly.
+        """
+        return CCXT_DEFAULT_CAPABILITIES
 
     # -------------------------------------------------------------------------
     # Utility Methods

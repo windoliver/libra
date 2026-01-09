@@ -83,6 +83,182 @@ class PositionSide(str, Enum):
     FLAT = "flat"  # No position
 
 
+class ContingencyType(str, Enum):
+    """
+    Order contingency/relationship types.
+
+    Inspired by NautilusTrader and Interactive Brokers patterns.
+
+    Types:
+    - NONE: Standalone order
+    - OTO: One-Triggers-Other (parent fill → submit children)
+    - OCO: One-Cancels-Other (one fills → cancel others)
+    - OUO: One-Updates-Other (partial fill → reduce other)
+    """
+
+    NONE = "none"  # Standalone order
+    OTO = "oto"  # One-Triggers-Other
+    OCO = "oco"  # One-Cancels-Other
+    OUO = "ouo"  # One-Updates-Other
+
+
+class TriggerType(str, Enum):
+    """
+    Trigger price type for conditional orders.
+
+    Used with stop orders and emulated order types.
+    """
+
+    LAST_PRICE = "last_price"  # Trigger on last trade price
+    BID_ASK = "bid_ask"  # Trigger on bid (sell) or ask (buy)
+    MID_POINT = "mid_point"  # Trigger on mid-point
+    MARK_PRICE = "mark_price"  # Trigger on mark price (derivatives)
+
+
+# =============================================================================
+# Gateway Capabilities (Issue #24 - Extensible Protocol Design)
+# =============================================================================
+
+
+class GatewayCapabilities(msgspec.Struct, frozen=True, gc=False):
+    """
+    Declares capabilities supported by a gateway.
+
+    Enables feature negotiation and graceful degradation.
+    Inspired by CCXT's exchange.has pattern.
+
+    Use Cases:
+    - Order validation before submission
+    - Automatic order emulation for unsupported types
+    - Strategy compatibility checks
+    - Documentation generation
+
+    Examples:
+        # Check before submitting stop order
+        if gateway.capabilities.stop_orders:
+            await gateway.submit_order(stop_order)
+        else:
+            # Emulate with price monitoring
+            await emulator.monitor(stop_order)
+
+        # Check margin trading support
+        if not gateway.capabilities.margin_trading:
+            raise UnsupportedFeatureError("Margin not supported")
+    """
+
+    # Order Types
+    market_orders: bool = True
+    limit_orders: bool = True
+    stop_orders: bool = False
+    stop_limit_orders: bool = False
+    trailing_stop_orders: bool = False
+    bracket_orders: bool = False
+    oco_orders: bool = False
+    oto_orders: bool = False
+
+    # Time-in-Force
+    tif_gtc: bool = True  # Good Till Cancelled
+    tif_ioc: bool = False  # Immediate Or Cancel
+    tif_fok: bool = False  # Fill Or Kill
+    tif_gtd: bool = False  # Good Till Date
+    tif_day: bool = False  # Day order
+
+    # Market Data
+    streaming_ticks: bool = True
+    streaming_orderbook: bool = False
+    streaming_trades: bool = False
+    historical_bars: bool = True
+    historical_trades: bool = False
+
+    # Trading Features
+    margin_trading: bool = False
+    futures_trading: bool = False
+    options_trading: bool = False
+    short_selling: bool = False
+    reduce_only: bool = False
+    post_only: bool = False
+
+    # Position Management
+    position_tracking: bool = True
+    hedge_mode: bool = False  # Separate long/short positions
+
+    # Rate Limits
+    max_orders_per_second: int = 10
+    max_requests_per_minute: int = 1200
+
+    # Order Emulation (gateway can emulate missing types)
+    emulated_stop_orders: bool = False
+    emulated_trailing_stops: bool = False
+    emulated_bracket_orders: bool = False
+
+    @property
+    def supported_order_types(self) -> frozenset[OrderType]:
+        """Get set of supported order types for fast lookup."""
+        types: set[OrderType] = set()
+        if self.market_orders:
+            types.add(OrderType.MARKET)
+        if self.limit_orders:
+            types.add(OrderType.LIMIT)
+        if self.stop_orders:
+            types.add(OrderType.STOP)
+        if self.stop_limit_orders:
+            types.add(OrderType.STOP_LIMIT)
+        return frozenset(types)
+
+    @property
+    def supported_time_in_force(self) -> frozenset[TimeInForce]:
+        """Get set of supported time-in-force options."""
+        tifs: set[TimeInForce] = set()
+        if self.tif_gtc:
+            tifs.add(TimeInForce.GTC)
+        if self.tif_ioc:
+            tifs.add(TimeInForce.IOC)
+        if self.tif_fok:
+            tifs.add(TimeInForce.FOK)
+        if self.tif_gtd:
+            tifs.add(TimeInForce.GTD)
+        if self.tif_day:
+            tifs.add(TimeInForce.DAY)
+        return frozenset(tifs)
+
+    def supports_order_type(self, order_type: OrderType) -> bool:
+        """Check if order type is supported."""
+        return order_type in self.supported_order_types
+
+    def supports_time_in_force(self, tif: TimeInForce) -> bool:
+        """Check if time-in-force is supported."""
+        return tif in self.supported_time_in_force
+
+
+# Default capabilities for common gateway types
+PAPER_GATEWAY_CAPABILITIES = GatewayCapabilities(
+    market_orders=True,
+    limit_orders=True,
+    stop_orders=True,
+    stop_limit_orders=True,
+    trailing_stop_orders=False,
+    bracket_orders=False,
+    streaming_ticks=True,
+    streaming_orderbook=True,
+    position_tracking=True,
+    margin_trading=True,
+    short_selling=True,
+)
+
+CCXT_DEFAULT_CAPABILITIES = GatewayCapabilities(
+    market_orders=True,
+    limit_orders=True,
+    stop_orders=False,  # Varies by exchange
+    stop_limit_orders=False,  # Varies by exchange
+    streaming_ticks=True,
+    streaming_orderbook=True,
+    historical_bars=True,
+    # Emulation available for missing features
+    emulated_stop_orders=True,
+    emulated_trailing_stops=True,
+)
+
+
 # =============================================================================
 # Data Structures (msgspec.Struct for performance)
 # =============================================================================
@@ -148,6 +324,15 @@ class Order(msgspec.Struct, frozen=True, gc=False):
     exec_algorithm_params: dict[str, Any] | None = None  # Algorithm-specific config
     parent_order_id: str | None = None  # For child orders spawned by algorithms
 
+    # Contingency order fields (Issue #24)
+    contingency_type: ContingencyType = ContingencyType.NONE
+    linked_order_ids: tuple[str, ...] | None = None  # IDs of related orders (OCO, OTO)
+
+    # Trailing stop fields (Issue #24)
+    trailing_offset: Decimal | None = None  # Trailing distance
+    trailing_offset_type: str | None = None  # "price" or "percent"
+    trigger_type: TriggerType | None = None  # What price triggers the order
+
     def with_id(self, order_id: str) -> Order:
         """Return new Order with exchange-assigned ID."""
         return Order(
@@ -167,6 +352,11 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             exec_algorithm=self.exec_algorithm,
             exec_algorithm_params=self.exec_algorithm_params,
             parent_order_id=self.parent_order_id,
+            contingency_type=self.contingency_type,
+            linked_order_ids=self.linked_order_ids,
+            trailing_offset=self.trailing_offset,
+            trailing_offset_type=self.trailing_offset_type,
+            trigger_type=self.trigger_type,
         )
 
     def with_timestamp(self) -> Order:
@@ -188,6 +378,11 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             exec_algorithm=self.exec_algorithm,
             exec_algorithm_params=self.exec_algorithm_params,
             parent_order_id=self.parent_order_id,
+            contingency_type=self.contingency_type,
+            linked_order_ids=self.linked_order_ids,
+            trailing_offset=self.trailing_offset,
+            trailing_offset_type=self.trailing_offset_type,
+            trigger_type=self.trigger_type,
         )
 
     def with_exec_algorithm(
@@ -213,6 +408,72 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             exec_algorithm=algorithm,
             exec_algorithm_params=params,
             parent_order_id=self.parent_order_id,
+            contingency_type=self.contingency_type,
+            linked_order_ids=self.linked_order_ids,
+            trailing_offset=self.trailing_offset,
+            trailing_offset_type=self.trailing_offset_type,
+            trigger_type=self.trigger_type,
+        )
+
+    def with_contingency(
+        self,
+        contingency_type: ContingencyType,
+        linked_order_ids: tuple[str, ...] | None = None,
+    ) -> Order:
+        """Return new Order with contingency relationship specified."""
+        return Order(
+            symbol=self.symbol,
+            side=self.side,
+            order_type=self.order_type,
+            amount=self.amount,
+            id=self.id,
+            client_order_id=self.client_order_id,
+            price=self.price,
+            stop_price=self.stop_price,
+            time_in_force=self.time_in_force,
+            reduce_only=self.reduce_only,
+            post_only=self.post_only,
+            leverage=self.leverage,
+            timestamp_ns=self.timestamp_ns,
+            exec_algorithm=self.exec_algorithm,
+            exec_algorithm_params=self.exec_algorithm_params,
+            parent_order_id=self.parent_order_id,
+            contingency_type=contingency_type,
+            linked_order_ids=linked_order_ids,
+            trailing_offset=self.trailing_offset,
+            trailing_offset_type=self.trailing_offset_type,
+            trigger_type=self.trigger_type,
+        )
+
+    def with_trailing_stop(
+        self,
+        offset: Decimal,
+        offset_type: str = "price",
+        trigger: TriggerType = TriggerType.LAST_PRICE,
+    ) -> Order:
+        """Return new Order configured as trailing stop."""
+        return Order(
+            symbol=self.symbol,
+            side=self.side,
+            order_type=self.order_type,
+            amount=self.amount,
+            id=self.id,
+            client_order_id=self.client_order_id,
+            price=self.price,
+            stop_price=self.stop_price,
+            time_in_force=self.time_in_force,
+            reduce_only=self.reduce_only,
+            post_only=self.post_only,
+            leverage=self.leverage,
+            timestamp_ns=self.timestamp_ns,
+            exec_algorithm=self.exec_algorithm,
+            exec_algorithm_params=self.exec_algorithm_params,
+            parent_order_id=self.parent_order_id,
+            contingency_type=self.contingency_type,
+            linked_order_ids=self.linked_order_ids,
+            trailing_offset=offset,
+            trailing_offset_type=offset_type,
+            trigger_type=trigger,
         )
 
     @property
@@ -224,6 +485,16 @@ class Order(msgspec.Struct, frozen=True, gc=False):
     def is_child_order(self) -> bool:
         """Check if this is a child order spawned by an algorithm."""
         return self.parent_order_id is not None
+
+    @property
+    def is_contingent(self) -> bool:
+        """Check if this order has contingency relationships."""
+        return self.contingency_type != ContingencyType.NONE
+
+    @property
+    def is_trailing_stop(self) -> bool:
+        """Check if this is a trailing stop order."""
+        return self.trailing_offset is not None
 
 
 class OrderResult(msgspec.Struct, frozen=True, gc=False):
@@ -542,6 +813,28 @@ class Gateway(Protocol):
 
         Returns:
             True if connected and authenticated, False otherwise.
+        """
+        ...
+
+    @property
+    def capabilities(self) -> GatewayCapabilities:
+        """
+        Gateway capabilities for feature negotiation.
+
+        Returns capabilities this gateway supports, enabling:
+        - Order type validation before submission
+        - Automatic order emulation for unsupported types
+        - Strategy compatibility checks
+
+        Returns:
+            GatewayCapabilities describing supported features.
+
+        Example:
+            if gateway.capabilities.stop_orders:
+                await gateway.submit_order(stop_order)
+            elif gateway.capabilities.emulated_stop_orders:
+                # Use emulation
+                ...
         """
         ...
 

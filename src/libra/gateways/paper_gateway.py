@@ -50,6 +50,7 @@ from uuid import uuid4
 from libra.gateways.protocol import (
     Balance,
     BaseGateway,
+    GatewayCapabilities,
     GatewayError,
     InsufficientFundsError,
     Order,
@@ -60,6 +61,7 @@ from libra.gateways.protocol import (
     OrderSide,
     OrderStatus,
     OrderType,
+    PAPER_GATEWAY_CAPABILITIES,
     Position,
     PositionSide,
     Tick,
@@ -227,6 +229,15 @@ class PaperGateway(BaseGateway):
 
         # Price feed gateway (optional)
         self._price_feed: BaseGateway | None = None
+
+    # -------------------------------------------------------------------------
+    # Capabilities (Issue #24)
+    # -------------------------------------------------------------------------
+
+    @property
+    def capabilities(self) -> GatewayCapabilities:
+        """Get gateway capabilities."""
+        return PAPER_GATEWAY_CAPABILITIES
 
     # -------------------------------------------------------------------------
     # Connection Management

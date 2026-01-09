@@ -15,18 +15,23 @@ import pytest
 
 from libra.gateways import (
     Balance,
+    CCXT_DEFAULT_CAPABILITIES,
+    ContingencyType,
     Gateway,
+    GatewayCapabilities,
     Order,
     OrderBook,
     OrderResult,
     OrderSide,
     OrderStatus,
     OrderType,
+    PAPER_GATEWAY_CAPABILITIES,
     PaperGateway,
     Position,
     PositionSide,
     Tick,
     TimeInForce,
+    TriggerType,
     decode_order,
     encode_order,
 )
@@ -420,3 +425,223 @@ class TestEnums:
         assert TimeInForce.GTC.value == "GTC"
         assert TimeInForce.IOC.value == "IOC"
         assert TimeInForce.FOK.value == "FOK"
+
+
+# =============================================================================
+# Issue #24: Extensible Protocol Design Tests
+# =============================================================================
+
+
+class TestGatewayCapabilities:
+    """Tests for GatewayCapabilities (Issue #24)."""
+
+    def test_default_capabilities(self) -> None:
+        """Test default capability values."""
+        caps = GatewayCapabilities()
+
+        assert caps.market_orders is True
+        assert caps.limit_orders is True
+        assert caps.stop_orders is False
+        assert caps.trailing_stop_orders is False
+        assert caps.oco_orders is False
+
+    def test_paper_gateway_capabilities(self) -> None:
+        """Test paper gateway default capabilities."""
+        caps = PAPER_GATEWAY_CAPABILITIES
+
+        assert caps.market_orders is True
+        assert caps.limit_orders is True
+        assert caps.stop_orders is True
+        assert caps.stop_limit_orders is True
+        assert caps.position_tracking is True
+        assert caps.margin_trading is True
+        assert caps.short_selling is True
+
+    def test_ccxt_default_capabilities(self) -> None:
+        """Test CCXT default capabilities."""
+        caps = CCXT_DEFAULT_CAPABILITIES
+
+        assert caps.market_orders is True
+        assert caps.limit_orders is True
+        # Stop orders vary by exchange - emulation available
+        assert caps.emulated_stop_orders is True
+        assert caps.emulated_trailing_stops is True
+        assert caps.streaming_ticks is True
+        assert caps.streaming_orderbook is True
+        assert caps.historical_bars is True
+
+    def test_supported_order_types(self) -> None:
+        """Test supported_order_types property."""
+        caps = GatewayCapabilities(
+            market_orders=True,
+            limit_orders=True,
+            stop_orders=True,
+            stop_limit_orders=False,
+        )
+
+        supported = caps.supported_order_types
+        assert OrderType.MARKET in supported
+        assert OrderType.LIMIT in supported
+        assert OrderType.STOP in supported
+        assert OrderType.STOP_LIMIT not in supported
+
+    def test_supports_order_type(self) -> None:
+        """Test supports_order_type method."""
+        caps = GatewayCapabilities(
+            market_orders=True,
+            limit_orders=True,
+            stop_orders=False,
+        )
+
+        assert caps.supports_order_type(OrderType.MARKET) is True
+        assert caps.supports_order_type(OrderType.LIMIT) is True
+        assert caps.supports_order_type(OrderType.STOP) is False
+
+    def test_capabilities_immutable(self) -> None:
+        """Test that capabilities are immutable."""
+        caps = GatewayCapabilities()
+
+        with pytest.raises(AttributeError):
+            caps.market_orders = False  # type: ignore
+
+
+class TestContingencyType:
+    """Tests for ContingencyType enum (Issue #24)."""
+
+    def test_contingency_type_values(self) -> None:
+        """Test ContingencyType enum values."""
+        assert ContingencyType.NONE.value == "none"
+        assert ContingencyType.OCO.value == "oco"
+        assert ContingencyType.OTO.value == "oto"
+        assert ContingencyType.OUO.value == "ouo"
+
+
+class TestTriggerType:
+    """Tests for TriggerType enum (Issue #24)."""
+
+    def test_trigger_type_values(self) -> None:
+        """Test TriggerType enum values."""
+        assert TriggerType.LAST_PRICE.value == "last_price"
+        assert TriggerType.BID_ASK.value == "bid_ask"
+        assert TriggerType.MID_POINT.value == "mid_point"
+        assert TriggerType.MARK_PRICE.value == "mark_price"
+
+
+class TestOrderExtensions:
+    """Tests for Order extension methods (Issue #24)."""
+
+    def test_with_contingency(self) -> None:
+        """Test Order.with_contingency() method."""
+        order = Order(
+            symbol="BTC/USDT",
+            side=OrderSide.BUY,
+            order_type=OrderType.LIMIT,
+            amount=Decimal("1.0"),
+            price=Decimal("50000"),
+        )
+
+        linked_ids = ("order-2", "order-3")
+        oco_order = order.with_contingency(
+            contingency_type=ContingencyType.OCO,
+            linked_order_ids=linked_ids,
+        )
+
+        # Original unchanged
+        assert order.contingency_type == ContingencyType.NONE
+        assert order.linked_order_ids is None
+
+        # New order has contingency
+        assert oco_order.contingency_type == ContingencyType.OCO
+        assert oco_order.linked_order_ids == linked_ids
+        assert oco_order.is_contingent is True
+        assert oco_order.is_trailing_stop is False
+
+    def test_with_trailing_stop_absolute(self) -> None:
+        """Test Order.with_trailing_stop() with absolute offset."""
+        order = Order(
+            symbol="BTC/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.STOP,
+            amount=Decimal("1.0"),
+        )
+
+        trailing = order.with_trailing_stop(
+            offset=Decimal("100"),
+            offset_type="absolute",
+            trigger=TriggerType.LAST_PRICE,
+        )
+
+        # Original unchanged
+        assert order.trailing_offset is None
+        assert order.is_trailing_stop is False
+
+        # New order has trailing stop
+        assert trailing.trailing_offset == Decimal("100")
+        assert trailing.trailing_offset_type == "absolute"
+        assert trailing.trigger_type == TriggerType.LAST_PRICE
+        assert trailing.is_trailing_stop is True
+        assert trailing.is_contingent is False
+
+    def test_with_trailing_stop_percentage(self) -> None:
+        """Test Order.with_trailing_stop() with percentage offset."""
+        order = Order(
+            symbol="BTC/USDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.STOP,
+            amount=Decimal("1.0"),
+        )
+
+        trailing = order.with_trailing_stop(
+            offset=Decimal("0.02"),  # 2%
+            offset_type="percentage",
+            trigger=TriggerType.MID_POINT,
+        )
+
+        assert trailing.trailing_offset == Decimal("0.02")
+        assert trailing.trailing_offset_type == "percentage"
+        assert trailing.trigger_type == TriggerType.MID_POINT
+        assert trailing.is_trailing_stop is True
+
+    def test_order_chaining(self) -> None:
+        """Test chaining multiple with_* methods."""
+        order = (
+            Order(
+                symbol="BTC/USDT",
+                side=OrderSide.BUY,
+                order_type=OrderType.LIMIT,
+                amount=Decimal("1.0"),
+                price=Decimal("50000"),
+                client_order_id="my-order-001",
+            )
+            .with_timestamp()
+            .with_contingency(ContingencyType.OTO, ("tp-id", "sl-id"))
+        )
+
+        assert order.client_order_id == "my-order-001"
+        assert order.timestamp_ns is not None
+        assert order.contingency_type == ContingencyType.OTO
+        assert order.linked_order_ids == ("tp-id", "sl-id")
+
+
+class TestPaperGatewayCapabilities:
+    """Tests for PaperGateway.capabilities property (Issue #24)."""
+
+    def test_paper_gateway_has_capabilities(self) -> None:
+        """Test that PaperGateway has capabilities property."""
+        gateway = PaperGateway()
+
+        assert hasattr(gateway, "capabilities")
+        assert isinstance(gateway.capabilities, GatewayCapabilities)
+
+    def test_paper_gateway_capabilities_values(self) -> None:
+        """Test PaperGateway capabilities values."""
+        gateway = PaperGateway()
+        caps = gateway.capabilities
+
+        # Paper gateway should support most features for simulation
+        assert caps.market_orders is True
+        assert caps.limit_orders is True
+        assert caps.stop_orders is True
+        assert caps.stop_limit_orders is True
+        assert caps.margin_trading is True
+        assert caps.short_selling is True
