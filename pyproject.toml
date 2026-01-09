@@ -44,7 +44,7 @@ ccxt = [
 
 # All optional plugins (convenience install)
 all-plugins = [
-    "libra[ccxt,freqtrade,tui,database]",
+    "libra[ccxt,freqtrade,tui,database,api]",
 ]
 
 # TUI - Terminal User Interface (v4.0+ required for Markdown streaming)
@@ -70,6 +70,15 @@ freqtrade = [
     "technical>=1.4",      # Freqtrade indicator library
     "pandas>=2.0",         # Required for DataFrames
     "pandas-ta>=0.3.14b",  # Additional technical indicators
+]
+
+# REST API - FastAPI endpoints (Issue #30)
+api = [
+    "fastapi>=0.115",      # Modern web framework
+    "uvicorn[standard]>=0.32",  # ASGI server with uvloop
+    "python-jose[cryptography]>=3.3",  # JWT authentication
+    "passlib[bcrypt]>=1.7",  # Password hashing
+    "python-multipart>=0.0.9",  # Form parsing
 ]
 
 [project.scripts]
