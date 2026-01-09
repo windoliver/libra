@@ -795,3 +795,279 @@ class TestConfirmationModal:
 
         assert modal._confirm_label == "Yes"
         assert modal._cancel_label == "No"
+
+
+# =============================================================================
+# Signal Log Tests (Issue #43)
+# =============================================================================
+
+
+class TestSignalType:
+    """Tests for SignalType enum."""
+
+    def test_all_types_defined(self):
+        """All signal types are defined."""
+        from libra.tui.widgets.signal_log import SignalType
+
+        assert SignalType.BUY.value == "BUY"
+        assert SignalType.SELL.value == "SELL"
+        assert SignalType.CLOSE_LONG.value == "CLOSE_LONG"
+        assert SignalType.CLOSE_SHORT.value == "CLOSE_SHORT"
+        assert SignalType.SCALE_IN.value == "SCALE_IN"
+        assert SignalType.SCALE_OUT.value == "SCALE_OUT"
+
+    def test_signal_colors(self):
+        """Each signal type has a color."""
+        from libra.tui.widgets.signal_log import SIGNAL_COLORS, SignalType
+
+        for signal_type in SignalType:
+            assert signal_type in SIGNAL_COLORS
+
+    def test_signal_icons(self):
+        """Each signal type has an icon."""
+        from libra.tui.widgets.signal_log import SIGNAL_ICONS, SignalType
+
+        for signal_type in SignalType:
+            assert signal_type in SIGNAL_ICONS
+
+
+class TestSignal:
+    """Tests for Signal dataclass."""
+
+    def test_create_signal(self):
+        """Create a signal with required fields."""
+        from decimal import Decimal
+
+        from libra.tui.widgets.signal_log import Signal, SignalType
+
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            symbol="BTC/USDT",
+            timestamp_ns=1704067200000000000,
+            entry_price=Decimal("50000"),
+            stop_loss=Decimal("49000"),
+            take_profit=Decimal("52000"),
+        )
+
+        assert signal.signal_type == SignalType.BUY
+        assert signal.symbol == "BTC/USDT"
+        assert signal.entry_price == Decimal("50000")
+        assert signal.stop_loss == Decimal("49000")
+        assert signal.take_profit == Decimal("52000")
+
+    def test_signal_auto_id(self):
+        """Signal generates an ID if not provided."""
+        from libra.tui.widgets.signal_log import Signal, SignalType
+
+        signal = Signal(
+            signal_type=SignalType.SELL,
+            symbol="ETH/USDT",
+            timestamp_ns=1704067200123456789,
+        )
+
+        assert signal.signal_id.startswith("SIG-")
+        assert len(signal.signal_id) > 4
+
+    def test_signal_timestamp_str(self):
+        """Signal formats timestamp as string."""
+        from libra.tui.widgets.signal_log import Signal, SignalType
+
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            symbol="BTC/USDT",
+            timestamp_ns=1704067200000000000,  # 2024-01-01 00:00:00 UTC
+        )
+
+        assert ":" in signal.timestamp_str  # Has time format HH:MM:SS
+
+    def test_signal_color(self):
+        """Signal returns correct color for type."""
+        from libra.tui.widgets.signal_log import Signal, SignalType
+
+        buy_signal = Signal(
+            signal_type=SignalType.BUY,
+            symbol="BTC/USDT",
+            timestamp_ns=1704067200000000000,
+        )
+        sell_signal = Signal(
+            signal_type=SignalType.SELL,
+            symbol="BTC/USDT",
+            timestamp_ns=1704067200000000000,
+        )
+
+        assert buy_signal.color == "green"
+        assert sell_signal.color == "red"
+
+    def test_signal_formatted_type(self):
+        """Signal formats type with color and icon."""
+        from libra.tui.widgets.signal_log import Signal, SignalType
+
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            symbol="BTC/USDT",
+            timestamp_ns=1704067200000000000,
+        )
+
+        formatted = signal.formatted_type
+        assert "green" in formatted
+        assert "BUY" in formatted
+
+    def test_signal_formatted_prices(self):
+        """Signal formats prices correctly."""
+        from decimal import Decimal
+
+        from libra.tui.widgets.signal_log import Signal, SignalType
+
+        signal = Signal(
+            signal_type=SignalType.BUY,
+            symbol="BTC/USDT",
+            timestamp_ns=1704067200000000000,
+            entry_price=Decimal("50000.50"),
+            stop_loss=Decimal("49000"),
+            take_profit=Decimal("52000"),
+        )
+
+        assert "$50,000.50" in signal.formatted_entry
+        assert "$49,000.00" in signal.formatted_sl
+        assert "$52,000.00" in signal.formatted_tp
+
+    def test_signal_none_prices(self):
+        """Signal handles None prices."""
+        from libra.tui.widgets.signal_log import Signal, SignalType
+
+        signal = Signal(
+            signal_type=SignalType.CLOSE_LONG,
+            symbol="BTC/USDT",
+            timestamp_ns=1704067200000000000,
+        )
+
+        assert signal.formatted_entry == "-"
+        assert signal.formatted_sl == "-"
+        assert signal.formatted_tp == "-"
+
+
+class TestCreateDemoSignals:
+    """Tests for demo signal generator."""
+
+    def test_create_demo_signals(self):
+        """Create demo signals."""
+        from libra.tui.widgets.signal_log import create_demo_signals
+
+        signals = create_demo_signals(count=10, symbol="BTC/USDT")
+
+        assert len(signals) == 10
+        for signal in signals:
+            assert signal.symbol == "BTC/USDT"
+            assert signal.entry_price is not None
+            assert signal.stop_loss is not None
+            assert signal.take_profit is not None
+            assert signal.reason != ""
+
+    def test_demo_signals_variety(self):
+        """Demo signals have variety of types."""
+        from libra.tui.widgets.signal_log import create_demo_signals
+
+        signals = create_demo_signals(count=50)
+        types = {s.signal_type for s in signals}
+
+        # Should have at least 2 different types with 50 signals
+        assert len(types) >= 2
+
+
+class TestStrategySignalLog:
+    """Tests for StrategySignalLog widget."""
+
+    def test_create_empty(self):
+        """Create empty signal log."""
+        from libra.tui.widgets.signal_log import StrategySignalLog
+
+        log = StrategySignalLog()
+
+        assert log._signals == []
+        assert log._title == "RECENT SIGNALS"
+
+    def test_create_with_signals(self):
+        """Create signal log with initial signals."""
+        from libra.tui.widgets.signal_log import (
+            Signal,
+            SignalType,
+            StrategySignalLog,
+        )
+
+        signals = [
+            Signal(
+                signal_type=SignalType.BUY,
+                symbol="BTC/USDT",
+                timestamp_ns=1704067200000000000,
+            ),
+            Signal(
+                signal_type=SignalType.SELL,
+                symbol="BTC/USDT",
+                timestamp_ns=1704067201000000000,
+            ),
+        ]
+        log = StrategySignalLog(signals=signals)
+
+        assert len(log._signals) == 2
+
+    def test_update_signals(self):
+        """Update signals in log."""
+        from libra.tui.widgets.signal_log import (
+            Signal,
+            SignalType,
+            StrategySignalLog,
+        )
+
+        log = StrategySignalLog()
+        assert len(log._signals) == 0
+
+        new_signals = [
+            Signal(
+                signal_type=SignalType.BUY,
+                symbol="ETH/USDT",
+                timestamp_ns=1704067200000000000,
+            ),
+        ]
+        log.update_signals(new_signals)
+
+        assert len(log._signals) == 1
+        assert log._signals[0].symbol == "ETH/USDT"
+
+    def test_add_signal(self):
+        """Add a single signal to log."""
+        from libra.tui.widgets.signal_log import (
+            Signal,
+            SignalType,
+            StrategySignalLog,
+        )
+
+        log = StrategySignalLog()
+        signal = Signal(
+            signal_type=SignalType.SCALE_IN,
+            symbol="SOL/USDT",
+            timestamp_ns=1704067200000000000,
+        )
+        log.add_signal(signal)
+
+        assert len(log._signals) == 1
+        assert log._signals[0].signal_type == SignalType.SCALE_IN
+
+    def test_clear_signals(self):
+        """Clear all signals from log."""
+        from libra.tui.widgets.signal_log import create_demo_signals, StrategySignalLog
+
+        signals = create_demo_signals(count=5)
+        log = StrategySignalLog(signals=signals)
+        assert len(log._signals) == 5
+
+        log.clear_signals()
+
+        assert len(log._signals) == 0
+        assert len(log._filtered_signals) == 0
+
+    def test_has_css(self):
+        """Widget has DEFAULT_CSS."""
+        from libra.tui.widgets.signal_log import StrategySignalLog
+
+        assert StrategySignalLog.DEFAULT_CSS
+        assert "StrategySignalLog" in StrategySignalLog.DEFAULT_CSS

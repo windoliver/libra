@@ -111,6 +111,14 @@ from libra.tui.widgets.order_history import (
     OrderStatusFilter,
 )
 
+# Strategy Signal Log (Issue #43)
+from libra.tui.widgets.signal_log import (
+    Signal,
+    SignalType,
+    StrategySignalLog,
+    create_demo_signals,
+)
+
 
 __all__ = [
     # Algorithm Monitor (Issue #36)
@@ -199,4 +207,9 @@ __all__ = [
     "FillHistoryTable",
     "OrderHistoryTable",
     "OrderStatusFilter",
+    # Strategy Signal Log (Issue #43)
+    "Signal",
+    "SignalType",
+    "StrategySignalLog",
+    "create_demo_signals",
 ]

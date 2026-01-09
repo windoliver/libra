@@ -67,6 +67,7 @@ from libra.tui.widgets.parameter_editor import (
 from libra.tui.widgets.strategy_card import StrategyCard
 from libra.tui.widgets.strategy_metrics import StrategyMetricsPanel
 from libra.tui.widgets.strategy_tree import PositionInfo, StrategyInfo, StrategyTree
+from libra.tui.widgets.signal_log import StrategySignalLog, create_demo_signals
 
 
 if TYPE_CHECKING:
@@ -358,7 +359,11 @@ class StrategyDetailPanel(VerticalScroll):
                 yield Static("[dim]No open positions[/dim]", id="positions-content")
 
             with Collapsible(title="Recent Signals", collapsed=True, id="signals-section"):
-                yield Static("[dim]No recent signals[/dim]", id="signals-content")
+                yield StrategySignalLog(
+                    signals=[],
+                    title="",
+                    id="signals-log",
+                )
 
             yield StrategyControlBar(id="control-bar")
 
@@ -407,6 +412,13 @@ class StrategyDetailPanel(VerticalScroll):
                 positions_content.update(pos_text)
             else:
                 positions_content.update("[dim]No open positions[/dim]")
+
+            # Update signals log with demo signals
+            signals_log = self.query_one("#signals-log", StrategySignalLog)
+            # Get first symbol from positions or use default
+            symbol = next(iter(strategy.positions.keys()), "BTC/USDT") if strategy.positions else "BTC/USDT"
+            demo_signals = create_demo_signals(count=15, symbol=symbol)
+            signals_log.update_signals(demo_signals)
 
             # Update control bar
             control_bar = self.query_one("#control-bar", StrategyControlBar)
