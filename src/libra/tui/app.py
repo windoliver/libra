@@ -46,15 +46,26 @@ from libra.tui.screens.strategy_management import (
     StrategyListPanel,
 )
 from libra.tui.widgets import (
+    BacktestResultsDashboard,
     BalanceDisplay,
     CommandInput,
+    EnhancedPositionsTable,
     LogViewer,
+    PortfolioDashboard,
+    PositionData,
     PositionDisplay,
     PositionInfo,
     RiskDashboard,
     StatusBar,
     StrategyInfo,
     StrategyTree,
+    create_demo_backtest_results,
+    create_demo_positions,
+)
+from libra.tui.screens.position_detail import (
+    ClosePositionModal,
+    PositionActionResult,
+    PositionDetailModal,
 )
 
 
@@ -195,7 +206,9 @@ class LibraApp(App):
         Binding("3", "switch_tab('orders')", show=False, id="tab.3"),
         Binding("4", "switch_tab('risk')", show=False, id="tab.4"),
         Binding("5", "switch_tab('strategies')", show=False, id="tab.5"),
-        Binding("6", "switch_tab('settings')", show=False, id="tab.6"),
+        Binding("6", "switch_tab('portfolio')", show=False, id="tab.6"),
+        Binding("7", "switch_tab('backtest')", show=False, id="tab.7"),
+        Binding("8", "switch_tab('settings')", show=False, id="tab.8"),
     ]
 
     def __init__(
@@ -277,6 +290,21 @@ class LibraApp(App):
                         id="strategy-list-panel",
                     )
                     yield StrategyDetailPanel(id="strategy-detail-panel")
+
+            with TabPane("Portfolio", id="portfolio"):
+                with VerticalScroll():
+                    yield PortfolioDashboard(id="portfolio-dashboard")
+                    yield EnhancedPositionsTable(
+                        positions=create_demo_positions(),
+                        id="enhanced-positions",
+                    )
+
+            with TabPane("Backtest", id="backtest"):
+                with VerticalScroll():
+                    yield BacktestResultsDashboard(
+                        data=create_demo_backtest_results(),
+                        id="backtest-dashboard",
+                    )
 
             with TabPane("Settings", id="settings"):
                 with VerticalScroll():
@@ -587,6 +615,70 @@ class LibraApp(App):
                 detail_panel.show_strategy(strategy)
             except Exception as e:
                 self.query_one(LogViewer).log_message(f"Error showing strategy: {e}", "error")
+
+    # =========================================================================
+    # Position Management Event Handlers
+    # =========================================================================
+
+    def on_enhanced_positions_table_position_selected(
+        self, event: EnhancedPositionsTable.PositionSelected
+    ) -> None:
+        """Handle position selection from enhanced positions table."""
+        position = event.position
+
+        def handle_position_action(result: PositionActionResult | None) -> None:
+            if result is None or result.action == "none":
+                return
+            if result.action == "close":
+                self._request_close_position(position)
+            elif result.action in ("modify_sl", "modify_tp"):
+                self.query_one(LogViewer).log_message(
+                    f"Modify SL/TP requested for {position.symbol}", "info"
+                )
+
+        self.push_screen(PositionDetailModal(position), handle_position_action)
+
+    def on_enhanced_positions_table_position_close_requested(
+        self, event: EnhancedPositionsTable.PositionCloseRequested
+    ) -> None:
+        """Handle close position request from enhanced positions table."""
+        self._request_close_position(event.position)
+
+    def _request_close_position(self, position: PositionData) -> None:
+        """Request to close a position with confirmation."""
+
+        def handle_confirmation(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            log = self.query_one(LogViewer)
+            log.log_message(
+                f"Closing position: {position.symbol} {position.side} {position.size}",
+                "warning",
+            )
+            # In demo mode, we'd actually close via demo_trader
+            if self.demo_mode:
+                side = "SELL" if position.side == "LONG" else "BUY"
+                success, msg = self.demo_trader.execute_order(
+                    symbol=position.symbol,
+                    side=side,
+                    quantity=position.size,
+                )
+                if success:
+                    log.log_message(f"Position closed: {msg}", "success")
+                    # Refresh positions table
+                    self._refresh_enhanced_positions()
+                else:
+                    log.log_message(f"Failed to close position: {msg}", "error")
+
+        self.push_screen(ClosePositionModal(position), handle_confirmation)
+
+    def _refresh_enhanced_positions(self) -> None:
+        """Refresh the enhanced positions table."""
+        try:
+            positions_table = self.query_one("#enhanced-positions", EnhancedPositionsTable)
+            positions_table.update_positions(create_demo_positions())
+        except Exception:
+            pass
 
     # =========================================================================
     # Demo Simulation

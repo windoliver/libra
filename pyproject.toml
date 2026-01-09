@@ -44,7 +44,8 @@ exchange = [
 
 # TUI - Terminal User Interface (v4.0+ required for Markdown streaming)
 tui = [
-    "textual>=7.0.0",  # v7.0 adds atom-one themes, v6.0 adds TextArea suggestions
+    "textual>=7.0.0",       # v7.0 adds atom-one themes, v6.0 adds TextArea suggestions
+    "textual-plotext>=1.0", # Plotext charts in Textual (Issue #40)
 ]
 
 # Future: validation (only at API boundaries)

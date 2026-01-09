@@ -13,6 +13,18 @@ from libra.tui.screens.strategy_edit_modal import (
     StrategyEditResult,
 )
 from libra.tui.screens.strategy_management import StrategyManagementScreen
+from libra.tui.screens.position_detail import (
+    ClosePositionModal,
+    PositionActionResult,
+    PositionDetailModal,
+)
+from libra.tui.screens.backtest_modal import (
+    BacktestConfig,
+    BacktestConfigModal,
+    BacktestResult,
+    BacktestResultsModal,
+    run_demo_backtest,
+)
 
 
 __all__ = [
@@ -27,4 +39,14 @@ __all__ = [
     "StrategyEditModal",
     "StrategyEditResult",
     "StrategyManagementScreen",
+    # Position Detail
+    "ClosePositionModal",
+    "PositionActionResult",
+    "PositionDetailModal",
+    # Backtest
+    "BacktestConfig",
+    "BacktestConfigModal",
+    "BacktestResult",
+    "BacktestResultsModal",
+    "run_demo_backtest",
 ]

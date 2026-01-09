@@ -41,6 +41,62 @@ from libra.tui.widgets.strategy_tree import (
     StrategyListView,
     StrategyTree,
 )
+from libra.tui.widgets.enhanced_positions import (
+    CompactPositionsTable,
+    EnhancedPositionsTable,
+    PositionData,
+    PositionRow,
+    SortablePositionsTable,
+    create_demo_positions,
+)
+from libra.tui.widgets.portfolio_dashboard import (
+    AllocationBar,
+    AssetAllocationTable,
+    AssetHolding,
+    DailyPnLCard,
+    PeriodReturns,
+    PortfolioDashboard,
+    PortfolioData,
+    TotalValueCard,
+)
+
+# Backtest Results Dashboard (Issue #40)
+from libra.tui.widgets.equity_chart import (
+    DrawdownChart,
+    EquityCurveChart,
+    EquityCurveData,
+    EquityPoint,
+    EquitySummary,
+    TradeMarker,
+    create_demo_equity_data,
+)
+from libra.tui.widgets.backtest_metrics import (
+    BacktestMetrics,
+    BacktestMetricsPanel,
+    MetricThresholds,
+    ReturnDisplay,
+    RiskMetricsPanel,
+    TradeStatsPanel,
+    create_demo_metrics,
+)
+from libra.tui.widgets.trade_history import (
+    CollapsibleTradeDetails,
+    FilterSide,
+    SortColumn,
+    SortDirection,
+    TradeDetailPanel,
+    TradeHistoryTable,
+    TradeRecord,
+    TradeSide,
+    create_demo_trades,
+)
+from libra.tui.widgets.backtest_dashboard import (
+    BacktestResultsData,
+    BacktestResultsDashboard,
+    BacktestResultsScreen,
+    convert_from_backtest_result,
+    create_demo_backtest_results,
+)
 
 
 __all__ = [
@@ -74,4 +130,52 @@ __all__ = [
     "StrategyMetricsPanel",
     "StrategyTree",
     "create_sma_cross_parameters",
+    # Enhanced Positions
+    "CompactPositionsTable",
+    "EnhancedPositionsTable",
+    "PositionData",
+    "PositionRow",
+    "create_demo_positions",
+    "SortablePositionsTable",
+    # Portfolio Dashboard
+    "AllocationBar",
+    "AssetAllocationTable",
+    "AssetHolding",
+    "DailyPnLCard",
+    "PeriodReturns",
+    "PortfolioDashboard",
+    "PortfolioData",
+    "TotalValueCard",
+    # Equity Chart (Issue #40)
+    "DrawdownChart",
+    "EquityCurveChart",
+    "EquityCurveData",
+    "EquityPoint",
+    "EquitySummary",
+    "TradeMarker",
+    "create_demo_equity_data",
+    # Backtest Metrics (Issue #40)
+    "BacktestMetrics",
+    "BacktestMetricsPanel",
+    "MetricThresholds",
+    "ReturnDisplay",
+    "RiskMetricsPanel",
+    "TradeStatsPanel",
+    "create_demo_metrics",
+    # Trade History (Issue #40)
+    "CollapsibleTradeDetails",
+    "FilterSide",
+    "SortColumn",
+    "SortDirection",
+    "TradeDetailPanel",
+    "TradeHistoryTable",
+    "TradeRecord",
+    "TradeSide",
+    "create_demo_trades",
+    # Backtest Dashboard (Issue #40)
+    "BacktestResultsData",
+    "BacktestResultsDashboard",
+    "BacktestResultsScreen",
+    "convert_from_backtest_result",
+    "create_demo_backtest_results",
 ]

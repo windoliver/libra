@@ -51,6 +51,13 @@ from libra.tui.screens.strategy_edit_modal import (
     StrategyEditModal,
     StrategyEditResult,
 )
+from libra.tui.screens.backtest_modal import (
+    BacktestConfig,
+    BacktestConfigModal,
+    BacktestResult,
+    BacktestResultsModal,
+    run_demo_backtest,
+)
 from libra.tui.widgets.parameter_editor import (
     ParameterDefinition,
     ParameterEditor,
@@ -206,7 +213,8 @@ class StrategyControlBar(Horizontal):
         yield Button("Start (s)", variant="success", id="btn-start")
         yield Button("Stop (x)", variant="error", id="btn-stop")
         yield Button("Pause (p)", variant="warning", id="btn-pause")
-        yield Button("Edit (e)", variant="primary", id="btn-edit")
+        yield Button("Backtest (b)", variant="primary", id="btn-backtest")
+        yield Button("Edit (e)", variant="default", id="btn-edit")
         yield Button("Delete (d)", variant="default", id="btn-delete")
 
     def set_status(self, status: str) -> None:
@@ -451,6 +459,7 @@ class StrategyManagementScreen(Screen):
         Binding("s", "start_strategy", "Start"),
         Binding("x", "stop_strategy", "Stop"),
         Binding("p", "pause_strategy", "Pause"),
+        Binding("b", "backtest_strategy", "Backtest"),
         Binding("r", "refresh", "Refresh"),
         # Section toggles
         Binding("1", "toggle_section('perf-section')", show=False),
@@ -553,6 +562,8 @@ class StrategyManagementScreen(Screen):
             self.action_stop_strategy()
         elif button_id == "btn-pause":
             self.action_pause_strategy()
+        elif button_id == "btn-backtest":
+            self.action_backtest_strategy()
         elif button_id == "btn-edit":
             self.action_edit_strategy()
         elif button_id == "btn-delete":
@@ -599,6 +610,45 @@ class StrategyManagementScreen(Screen):
                 pass
 
             self.notify(f"Created strategy: {result.strategy_name}")
+
+    def action_backtest_strategy(self) -> None:
+        """Open backtest configuration modal."""
+        if not self._selected_strategy_id:
+            self.notify("No strategy selected", severity="warning")
+            return
+
+        strategy = self._strategies.get(self._selected_strategy_id)
+        if not strategy:
+            return
+
+        self.app.push_screen(
+            BacktestConfigModal(
+                strategy_id=strategy.strategy_id,
+                strategy_name=strategy.name,
+            ),
+            callback=self._on_backtest_config,
+        )
+
+    def _on_backtest_config(self, config: BacktestConfig | None) -> None:
+        """Handle backtest configuration result."""
+        if config is None:
+            return
+
+        self.notify(f"Running backtest for {config.strategy_name}...")
+
+        # Run the demo backtest (in real implementation, this would be async)
+        result = run_demo_backtest(config)
+
+        # Show results
+        self.app.push_screen(
+            BacktestResultsModal(result),
+            callback=self._on_backtest_results,
+        )
+
+    def _on_backtest_results(self, saved: bool | None) -> None:
+        """Handle backtest results modal close."""
+        if saved:
+            self.notify("Backtest results saved")
 
     def action_edit_strategy(self) -> None:
         """Open edit modal for selected strategy."""
