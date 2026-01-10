@@ -150,6 +150,19 @@ from libra.tui.widgets.health_monitor import (
     create_demo_health_data,
 )
 
+# Prediction Market Dashboard (Issue #39)
+from libra.tui.widgets.prediction_market_dashboard import (
+    MarketDisplayData,
+    MarketSearchInput,
+    MarketsTable,
+    PositionDisplayData,
+    PositionsTable,
+    PredictionMarketDashboard,
+    PredictionMarketDashboardData,
+    ProviderStatusBar,
+    create_demo_prediction_markets,
+)
+
 
 __all__ = [
     # Algorithm Monitor (Issue #36)
@@ -267,4 +280,14 @@ __all__ = [
     "SystemHealthData",
     "SystemResourcesPanel",
     "create_demo_health_data",
+    # Prediction Market Dashboard (Issue #39)
+    "MarketDisplayData",
+    "MarketSearchInput",
+    "MarketsTable",
+    "PositionDisplayData",
+    "PositionsTable",
+    "PredictionMarketDashboard",
+    "PredictionMarketDashboardData",
+    "ProviderStatusBar",
+    "create_demo_prediction_markets",
 ]

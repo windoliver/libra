@@ -18,11 +18,20 @@ Ergonomic Features (based on 2025 best practices):
 
 from __future__ import annotations
 
+import os
 import random
 import time
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Iterable
+
+# Performance tuning via environment variables
+# LIBRA_UPDATE_INTERVAL: Update interval in seconds (default: 2.0)
+# LIBRA_DISABLE_HEAVY_UPDATES: Set to "1" to disable heavy widget updates
+# LIBRA_LITE_MODE: Set to "1" for minimal updates (best performance)
+UPDATE_INTERVAL = float(os.environ.get("LIBRA_UPDATE_INTERVAL", "2.0"))
+DISABLE_HEAVY_UPDATES = os.environ.get("LIBRA_DISABLE_HEAVY_UPDATES", "0") == "1"
+LITE_MODE = os.environ.get("LIBRA_LITE_MODE", "0") == "1"
 
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
@@ -72,6 +81,9 @@ from libra.tui.widgets import (
     create_demo_metrics_data,
     create_demo_trace_data,
     create_demo_health_data,
+    # Prediction Market Dashboard (Issue #39)
+    PredictionMarketDashboard,
+    create_demo_prediction_markets,
 )
 from libra.tui.widgets.openbb_data import OpenBBDataDashboard
 
@@ -132,15 +144,23 @@ class PnLDisplay(Static):
     def __init__(self, id: str = "pnl-display") -> None:
         super().__init__(id=id)
         self._value = Decimal("0.00")
+        # PERFORMANCE: Cache Digits reference
+        self._cached_digits: Digits | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("TOTAL P&L")
         yield Digits("+$0.00", id="pnl-digits")
 
+    def on_mount(self) -> None:
+        """Cache Digits widget reference."""
+        self._cached_digits = self.query_one("#pnl-digits", Digits)
+
     def update_pnl(self, value: Decimal) -> None:
-        """Update the P&L display with CVD-friendly icon."""
+        """Update the P&L display with CVD-friendly icon using cached ref."""
         self._value = value
-        digits = self.query_one("#pnl-digits", Digits)
+        digits = self._cached_digits
+        if not digits:
+            return
 
         # Add icon for colorblind accessibility
         if value > 0:
@@ -267,6 +287,18 @@ class LibraApp(App):
         self._alert_count: int = 0
         self._max_alerts_per_minute: int = 10
 
+        # Cached widget references (performance optimization)
+        self._cached_log_viewer: LogViewer | None = None
+        self._cached_status_bar: StatusBar | None = None
+        self._cached_pnl_display: PnLDisplay | None = None
+        self._cached_balance_display: BalanceDisplay | None = None
+        self._cached_position_display: PositionDisplay | None = None
+        self._cached_risk_dashboard: RiskDashboard | None = None
+        self._cached_algo_monitor: AlgorithmMonitor | None = None
+        self._cached_health_monitor: HealthMonitorWidget | None = None
+        self._cached_metrics_dashboard: MetricsDashboard | None = None
+        self._cached_prediction_dashboard: PredictionMarketDashboard | None = None
+
     # =========================================================================
     # System Commands (Command Palette)
     # =========================================================================
@@ -350,6 +382,10 @@ class LibraApp(App):
             with TabPane("Data", id="data"):
                 yield OpenBBDataDashboard(id="openbb-data-dashboard")
 
+            # Prediction Market tab (Issue #39)
+            with TabPane("Predictions", id="predictions"):
+                yield PredictionMarketDashboard(id="prediction-market-dashboard")
+
             with TabPane("Settings", id="settings"):
                 with VerticalScroll():
                     yield Static("Settings", classes="panel-title")
@@ -366,6 +402,9 @@ class LibraApp(App):
 
     def on_mount(self) -> None:
         """Initialize application."""
+        # Cache widget references for performance (avoid repeated query_one calls)
+        self._cache_widget_refs()
+
         # Load user keymaps if available
         self._load_user_keymap()
 
@@ -373,6 +412,71 @@ class LibraApp(App):
             self._setup_demo_mode()
         else:
             self._setup_live_mode()
+
+    def _cache_widget_refs(self) -> None:
+        """Cache frequently-accessed widget references to avoid DOM traversal."""
+        try:
+            self._cached_log_viewer = self.query_one(LogViewer)
+        except Exception:
+            pass
+        try:
+            self._cached_status_bar = self.query_one(StatusBar)
+        except Exception:
+            pass
+        try:
+            self._cached_pnl_display = self.query_one(PnLDisplay)
+        except Exception:
+            pass
+        try:
+            self._cached_balance_display = self.query_one(BalanceDisplay)
+        except Exception:
+            pass
+        try:
+            self._cached_position_display = self.query_one(PositionDisplay)
+        except Exception:
+            pass
+        try:
+            self._cached_risk_dashboard = self.query_one("#risk-dashboard", RiskDashboard)
+        except Exception:
+            pass
+        try:
+            self._cached_algo_monitor = self.query_one("#algo-monitor", AlgorithmMonitor)
+        except Exception:
+            pass
+        try:
+            self._cached_health_monitor = self.query_one("#health-monitor", HealthMonitorWidget)
+        except Exception:
+            pass
+        try:
+            self._cached_metrics_dashboard = self.query_one("#metrics-dashboard", MetricsDashboard)
+        except Exception:
+            pass
+        try:
+            self._cached_prediction_dashboard = self.query_one(
+                "#prediction-market-dashboard", PredictionMarketDashboard
+            )
+        except Exception:
+            pass
+
+    def _get_log_viewer(self) -> LogViewer | None:
+        """Get cached LogViewer reference."""
+        return self._cached_log_viewer
+
+    def _get_status_bar(self) -> StatusBar | None:
+        """Get cached StatusBar reference."""
+        return self._cached_status_bar
+
+    def _get_pnl_display(self) -> PnLDisplay | None:
+        """Get cached PnLDisplay reference."""
+        return self._cached_pnl_display
+
+    def _get_risk_dashboard(self) -> RiskDashboard | None:
+        """Get cached RiskDashboard reference."""
+        return self._cached_risk_dashboard
+
+    def _get_prediction_dashboard(self) -> PredictionMarketDashboard | None:
+        """Get cached PredictionMarketDashboard reference."""
+        return self._cached_prediction_dashboard
 
     def _load_user_keymap(self) -> None:
         """Load user-configurable keymaps from config file."""
@@ -423,12 +527,21 @@ class LibraApp(App):
             timeout=3,
         )
 
-        # Timers for simulation
-        self.set_interval(0.5, self._simulate_tick)  # Faster price updates
-        self.set_interval(2.0, self._update_positions)
-        self.set_interval(1.0, self._update_risk_dashboard)
-        self.set_interval(5.0, self._maybe_auto_trade)  # Auto trades every 5s
-        self.set_interval(2.0, self._update_observability)  # Observability updates (Issue #25)
+        # PERFORMANCE: Consolidated single timer with configurable interval
+        # Use LIBRA_UPDATE_INTERVAL env var to adjust (default: 2.0s)
+        # Use LIBRA_LITE_MODE=1 for minimal updates
+        if LITE_MODE:
+            # Lite mode: very infrequent updates for best scrolling performance
+            self.set_interval(5.0, self._lite_tick)
+        else:
+            self.set_interval(UPDATE_INTERVAL, self._consolidated_tick)
+
+        # PERFORMANCE: Track active tab for lazy updates
+        self._active_tab: str = "dashboard"
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Track active tab for lazy updates."""
+        self._active_tab = event.pane.id or "dashboard"
 
     def _setup_live_mode(self) -> None:
         """Setup for live trading mode."""
@@ -1010,46 +1123,127 @@ class LibraApp(App):
     # =========================================================================
 
     def _sync_balance_from_demo(self) -> None:
-        """Sync balance display from demo trader."""
-        try:
-            stats = self.demo_trader.get_stats()
-            balance_display = self.query_one(BalanceDisplay)
-            table = balance_display.query_one(DataTable)
-            table.clear()
+        """Sync balance display from demo trader using cached reference."""
+        balance_display = self._cached_balance_display
+        if not balance_display:
+            return
 
-            # Show USDT balance
-            equity = stats["equity"]
-            available = stats["balance"]
-            in_use = stats["total_exposure"]
-            pct_used = float(in_use / equity * 100) if equity > 0 else 0
+        stats = self.demo_trader.get_stats()
 
-            pct_color = "green" if pct_used < 50 else "yellow" if pct_used < 80 else "red"
-            table.add_row(
-                "USDT",
-                f"{equity:,.2f}",
-                f"{available:,.2f}",
-                f"{in_use:,.2f}",
-                f"[{pct_color}]{pct_used:.1f}%[/{pct_color}]",
-            )
-        except Exception:
-            pass
+        # Show USDT balance - use update_balance_row for differential update
+        equity = stats["equity"]
+        available = stats["balance"]
+        in_use = stats["total_exposure"]
+        pct_used = float(in_use / equity * 100) if equity > 0 else 0
+
+        pct_color = "green" if pct_used < 50 else "yellow" if pct_used < 80 else "red"
+        balance_display.update_balance_row(
+            "USDT",
+            f"{equity:,.2f}",
+            f"{available:,.2f}",
+            f"{in_use:,.2f}",
+            f"[{pct_color}]{pct_used:.1f}%[/{pct_color}]",
+        )
 
     def _on_demo_trade(self, message: str) -> None:
         """Callback when demo trader executes a trade."""
-        log = self.query_one(LogViewer)
-        icon = ICON_UP if "BUY" in message else ICON_DOWN
-        log.log_message(f"{icon} {message}", "success")
+        log = self._cached_log_viewer
+        if log:
+            icon = ICON_UP if "BUY" in message else ICON_DOWN
+            log.log_message(f"{icon} {message}", "success")
 
     def _on_demo_risk_event(self, state: str, reason: str) -> None:
         """Callback when demo trader triggers risk event."""
-        log = self.query_one(LogViewer)
-        log.log_message(f"⚠ RISK STATE: {state} - {reason}", "warning")
+        log = self._cached_log_viewer
+        if log:
+            log.log_message(f"⚠ RISK STATE: {state} - {reason}", "warning")
         self._throttled_notify(reason, title=f"Risk: {state}", severity="warning", timeout=5)
 
-    def _simulate_tick(self) -> None:
-        """Simulate price updates using DemoTrader."""
+    def _lite_tick(self) -> None:
+        """
+        PERFORMANCE: Minimal updates for best scrolling/tab performance.
+
+        Only updates essential data, skips heavy widgets.
+        Enable with LIBRA_LITE_MODE=1
+        """
         self._tick_count += 1
 
+        # Only update prices and P&L (minimal updates)
+        price_updates = self.demo_trader.tick_prices()
+        self._btc_price = price_updates.get("BTC/USDT", self._btc_price)
+        self._eth_price = price_updates.get("ETH/USDT", self._eth_price)
+        self._sol_price = price_updates.get("SOL/USDT", self._sol_price)
+
+        stats = self.demo_trader.get_stats()
+        self._total_pnl = stats["realized_pnl"] + stats["unrealized_pnl"]
+
+        # Update P&L display only
+        pnl_display = self._cached_pnl_display
+        if pnl_display:
+            pnl_display.update_pnl(self._total_pnl)
+
+    def _consolidated_tick(self) -> None:
+        """
+        PERFORMANCE: Single consolidated timer replacing 5 separate timers.
+
+        Batches updates intelligently with LAZY TAB UPDATES:
+        - Only updates widgets on the currently visible tab
+        - Price updates: every tick (lightweight, always runs)
+        - P&L display: every tick (lightweight, always runs)
+        - Tab-specific updates: only when that tab is active
+
+        Environment variables:
+        - LIBRA_UPDATE_INTERVAL: Tick interval in seconds (default: 2.0)
+        - LIBRA_DISABLE_HEAVY_UPDATES: Skip heavy widget updates
+        """
+        self._tick_count += 1
+
+        # Always update prices (lightweight)
+        self._update_prices_batch()
+
+        # Skip heavy updates if disabled for performance
+        if DISABLE_HEAVY_UPDATES:
+            # Only auto trade occasionally
+            if self._tick_count % 5 == 0:
+                self._maybe_auto_trade()
+            return
+
+        # PERFORMANCE: Lazy tab updates - only update active tab widgets
+        active_tab = getattr(self, "_active_tab", "dashboard")
+
+        # Dashboard tab: balance and positions
+        if active_tab == "dashboard":
+            self._sync_balance_from_demo()
+            if self._tick_count % 2 == 0:
+                self._update_positions()
+
+        # Positions tab
+        elif active_tab == "positions":
+            if self._tick_count % 2 == 0:
+                self._update_positions()
+
+        # Risk tab: risk dashboard
+        elif active_tab == "risk":
+            self._update_risk_dashboard()
+
+        # Observability tab: health and metrics
+        elif active_tab == "observability":
+            if self._tick_count % 3 == 0:
+                self._update_observability()
+
+        # Predictions tab: update prediction market prices (Issue #39)
+        elif active_tab == "predictions":
+            if self._tick_count % 3 == 0:
+                self._update_prediction_markets()
+
+        # Other tabs: minimal updates (portfolio, backtest, etc. have their own timers or static data)
+
+        # Auto trade every 5 ticks (always runs for simulation)
+        if self._tick_count % 5 == 0:
+            self._maybe_auto_trade()
+
+    def _update_prices_batch(self) -> None:
+        """Update prices using cached references - no DOM traversal."""
         # Update prices via demo trader
         price_updates = self.demo_trader.tick_prices()
 
@@ -1058,29 +1252,30 @@ class LibraApp(App):
         self._eth_price = price_updates.get("ETH/USDT", self._eth_price)
         self._sol_price = price_updates.get("SOL/USDT", self._sol_price)
 
-        # Log price tick occasionally
+        # Log price tick occasionally (every 4 seconds)
         if self._tick_count % 4 == 0:
-            log = self.query_one(LogViewer)
-            symbols = [("BTC", self._btc_price), ("ETH", self._eth_price), ("SOL", self._sol_price)]
-            sym, price = symbols[self._tick_count % 3]
-            log.log_message(f"TICK {sym}/USDT @ ${price:,.2f}", "debug")
+            log = self._cached_log_viewer
+            if log:
+                symbols = [("BTC", self._btc_price), ("ETH", self._eth_price), ("SOL", self._sol_price)]
+                sym, price = symbols[self._tick_count % 3]
+                log.log_message(f"TICK {sym}/USDT @ ${price:,.2f}", "debug")
 
-        # Update P&L display
+        # Update P&L display using cached reference
         stats = self.demo_trader.get_stats()
         self._total_pnl = stats["realized_pnl"] + stats["unrealized_pnl"]
 
-        try:
-            pnl_display = self.query_one(PnLDisplay)
+        pnl_display = self._cached_pnl_display
+        if pnl_display:
             pnl_display.update_pnl(self._total_pnl)
-        except Exception:
-            pass
 
     def _maybe_auto_trade(self) -> None:
         """Occasionally execute auto trades for demo."""
         if self.demo_trader.trading_state != DemoTradingState.ACTIVE:
             return
 
-        log = self.query_one(LogViewer)
+        log = self._cached_log_viewer
+        if not log:
+            return
 
         # Pick random symbol
         symbol = random.choice(["BTC/USDT", "ETH/USDT", "SOL/USDT"])  # noqa: S311
@@ -1107,59 +1302,81 @@ class LibraApp(App):
             log.log_message(f"{ICON_NEUTRAL} AUTO blocked: {msg}", "debug")
 
     def _update_risk_dashboard(self) -> None:
-        """Update risk dashboard from DemoTrader state."""
-        try:
-            dashboard = self.query_one("#risk-dashboard", RiskDashboard)
-            stats = self.demo_trader.get_stats()
+        """Update risk dashboard from DemoTrader state using cached reference."""
+        dashboard = self._cached_risk_dashboard
+        if not dashboard:
+            return
 
-            # Trading state
-            dashboard.set_trading_state(stats["trading_state"])
+        stats = self.demo_trader.get_stats()
 
-            # Drawdown
-            dashboard.set_drawdown(stats["drawdown_pct"], self.demo_trader.max_drawdown_pct)
+        # Trading state
+        dashboard.set_trading_state(stats["trading_state"])
 
-            # Daily P&L
-            daily_pnl = float(stats["daily_pnl"])
-            daily_limit = float(self.demo_trader.daily_loss_limit)
-            dashboard.set_daily_pnl(daily_pnl, daily_limit)
+        # Drawdown
+        dashboard.set_drawdown(stats["drawdown_pct"], self.demo_trader.max_drawdown_pct)
 
-            # Order rate
-            dashboard.set_order_rate(
-                self.demo_trader.orders_this_second,
-                self.demo_trader.order_rate_limit,
-            )
-            self.demo_trader.orders_this_second = 0  # Reset per-second counter
+        # Daily P&L
+        daily_pnl = float(stats["daily_pnl"])
+        daily_limit = float(self.demo_trader.daily_loss_limit)
+        dashboard.set_daily_pnl(daily_pnl, daily_limit)
 
-            # Position exposures
-            for symbol in ["BTC/USDT", "ETH/USDT", "SOL/USDT"]:
-                current, limit = self.demo_trader.get_position_exposure(symbol)
-                dashboard.set_exposure(symbol, current, limit)
+        # Order rate
+        dashboard.set_order_rate(
+            self.demo_trader.orders_this_second,
+            self.demo_trader.order_rate_limit,
+        )
+        self.demo_trader.orders_this_second = 0  # Reset per-second counter
 
-            # Circuit breaker
-            dashboard.set_circuit_breaker(stats["circuit_breaker"])
+        # Position exposures
+        for symbol in ["BTC/USDT", "ETH/USDT", "SOL/USDT"]:
+            current, limit = self.demo_trader.get_position_exposure(symbol)
+            dashboard.set_exposure(symbol, current, limit)
 
-            # Also sync balance
-            self._sync_balance_from_demo()
-        except Exception:
-            pass
+        # Circuit breaker
+        dashboard.set_circuit_breaker(stats["circuit_breaker"])
+
+        # Also sync balance
+        self._sync_balance_from_demo()
 
     def _update_observability(self) -> None:
-        """Update observability widgets with demo data (Issue #25)."""
-        try:
-            # Update health monitor
-            health_monitor = self.query_one("#health-monitor", HealthMonitorWidget)
+        """Update observability widgets with demo data using cached refs (Issue #25)."""
+        # Update health monitor using cached reference
+        health_monitor = self._cached_health_monitor
+        if health_monitor:
             health_data = create_demo_health_data()
             health_monitor.update_health(health_data)
-        except Exception:
-            pass
 
-        try:
-            # Update metrics dashboard
-            metrics_dashboard = self.query_one("#metrics-dashboard", MetricsDashboard)
+        # Update metrics dashboard using cached reference
+        metrics_dashboard = self._cached_metrics_dashboard
+        if metrics_dashboard:
             metrics_data = create_demo_metrics_data()
             metrics_dashboard.update_from_collector(metrics_data)
-        except Exception:
-            pass
+
+    def _update_prediction_markets(self) -> None:
+        """Update prediction market dashboard with simulated price changes (Issue #39)."""
+        dashboard = self._cached_prediction_dashboard
+        if not dashboard:
+            return
+
+        # Generate updated demo data with slightly different probabilities
+        demo_data = create_demo_prediction_markets()
+
+        # Apply small random probability changes to simulate live market
+        for market in demo_data.markets:
+            # Simulate probability drift (-2% to +2%)
+            delta = Decimal(str(random.uniform(-0.02, 0.02)))  # noqa: S311
+            market.yes_price = max(
+                Decimal("0.01"),
+                min(Decimal("0.99"), market.yes_price + delta)
+            )
+            market.no_price = Decimal("1.00") - market.yes_price
+
+            # Update volume with small random change
+            volume_change = Decimal(str(random.uniform(0.95, 1.05)))  # noqa: S311
+            market.volume = market.volume * volume_change
+
+        # Update dashboard
+        dashboard.update_from_data(demo_data)
 
     # =========================================================================
     # Live Mode Event Handling
