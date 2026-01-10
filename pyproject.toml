@@ -11,6 +11,7 @@ authors = [
 keywords = ["trading", "algorithmic-trading", "message-bus", "async", "high-performance"]
 
 dependencies = [
+    # Core
     "msgspec>=0.18",                           # Fast structs (4x faster than dataclass)
     "aiohttp>=3.9",                            # Async HTTP client
     "rich>=13.0",                              # Pretty terminal output
@@ -18,6 +19,28 @@ dependencies = [
     "uvloop>=0.21; sys_platform != 'win32'",   # 2-4x faster asyncio (Unix only)
     "polars>=1.0",                             # 10-3500x faster than pandas
     "pyyaml>=6.0",                             # YAML config files
+    # TUI (Issue #40)
+    "textual>=7.0.0",                          # Terminal UI framework
+    "textual-plotext>=1.0",                    # Charts in terminal
+    # OpenBB Data Gateway (Issue #28)
+    "openbb>=4.0",                             # OpenBB Platform v4+
+    "openbb-yfinance>=1.0",                    # Yahoo Finance provider (free)
+    "yfinance>=0.2.50,<0.2.60",                # Pin to version that works with curl-cffi 0.7
+    "curl-cffi>=0.7,<0.8",                     # Pin to version with pre-built wheels
+    # Exchange Connectivity (Issue #29)
+    "ccxt>=4.0",                               # 100+ crypto exchanges
+    # Database (Issue #21)
+    "questdb>=3.0",                            # QuestDB time-series
+    "asyncpg>=0.29",                           # Async PostgreSQL
+    # REST API (Issue #30)
+    "fastapi>=0.115",                          # Web framework
+    "uvicorn[standard]>=0.32",                 # ASGI server
+    "python-jose[cryptography]>=3.3",          # JWT auth
+    "passlib[bcrypt]>=1.7",                    # Password hashing
+    "python-multipart>=0.0.9",                 # Form parsing
+    # Web3/DEX (Issue #12)
+    "web3>=6.0",                               # Ethereum interaction
+    "eth-account>=0.11",                       # Account management
 ]
 
 [project.optional-dependencies]
@@ -50,13 +73,19 @@ web3 = [
 
 # All optional plugins (convenience install)
 all-plugins = [
-    "libra[ccxt,freqtrade,tui,database,api,web3]",
+    "libra[ccxt,freqtrade,tui,database,api,web3,openbb]",
 ]
 
 # TUI - Terminal User Interface (v4.0+ required for Markdown streaming)
 tui = [
     "textual>=7.0.0",       # v7.0 adds atom-one themes, v6.0 adds TextArea suggestions
     "textual-plotext>=1.0", # Plotext charts in Textual (Issue #40)
+]
+
+# OpenBB - Market data gateway (Issue #28)
+openbb = [
+    "openbb>=4.0",          # OpenBB Platform v4+
+    "openbb-yfinance>=1.0", # Yahoo Finance provider (free, no API key)
 ]
 
 # Future: validation (only at API boundaries)

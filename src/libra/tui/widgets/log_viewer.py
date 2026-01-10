@@ -60,8 +60,9 @@ class LogViewer(Vertical, can_focus=False):
 
     DEFAULT_CSS = """
     LogViewer {
-        height: 1fr;
+        height: auto;
         min-height: 8;
+        max-height: 12;
         border: round $primary-darken-1;
         background: $surface;
     }

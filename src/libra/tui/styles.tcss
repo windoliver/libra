@@ -321,3 +321,40 @@ Sparkline {
 #strategy-panels {
     height: 100%;
 }
+
+/* ============================================================================
+   OPENBB DATA DASHBOARD (Issue #28)
+   ============================================================================ */
+
+#openbb-data-dashboard {
+    height: 1fr;
+}
+
+#data-tabs {
+    height: 1fr;
+}
+
+#data-tabs > ContentSwitcher {
+    height: 1fr;
+}
+
+#data-tabs TabPane {
+    height: 1fr;
+}
+
+#price-chart {
+    height: 1fr;
+}
+
+#price-plot {
+    height: 1fr;
+    min-height: 10;
+}
+
+.dashboard-content {
+    height: 1fr;
+}
+
+.chart-area {
+    height: 1fr;
+}

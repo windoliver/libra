@@ -24,6 +24,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Iterable
 
+from textual import work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, VerticalScroll
@@ -72,6 +73,15 @@ from libra.tui.widgets import (
     create_demo_trace_data,
     create_demo_health_data,
 )
+from libra.tui.widgets.openbb_data import OpenBBDataDashboard
+
+# Optional OpenBB gateway import
+try:
+    from libra.gateways.openbb import OpenBBGateway
+    OPENBB_AVAILABLE = True
+except ImportError:
+    OPENBB_AVAILABLE = False
+    OpenBBGateway = None  # type: ignore
 from libra.tui.screens.position_detail import (
     ClosePositionModal,
     PositionActionResult,
@@ -238,6 +248,9 @@ class LibraApp(App):
         # Demo trading engine
         self.demo_trader = DemoTrader()
 
+        # OpenBB gateway for data fetching (Issue #28)
+        self._openbb_gateway = None
+
         # Demo execution client and engine (Issue #36)
         self._demo_execution_client: DemoExecutionClient | None = None
         self._execution_engine = None  # Lazy import to avoid circular deps
@@ -333,6 +346,10 @@ class LibraApp(App):
                     yield Rule()
                     yield MetricsDashboard(id="metrics-dashboard")
 
+            # OpenBB Data tab (Issue #28)
+            with TabPane("Data", id="data"):
+                yield OpenBBDataDashboard(id="openbb-data-dashboard")
+
             with TabPane("Settings", id="settings"):
                 with VerticalScroll():
                     yield Static("Settings", classes="panel-title")
@@ -389,6 +406,9 @@ class LibraApp(App):
         log.log_message("Demo Mode: Realistic trading simulation", "info")
         log.log_message("Press ? for help, o to place orders", "info")
 
+        # Initialize OpenBB gateway for Data tab (Issue #28)
+        self._init_openbb_gateway()
+
         # Setup demo trader callbacks
         self.demo_trader.on_trade = self._on_demo_trade
         self.demo_trader.on_risk_event = self._on_demo_risk_event
@@ -423,6 +443,40 @@ class LibraApp(App):
 
         self.set_interval(2.0, self._refresh_account_data)
         self.set_interval(1.0, self._refresh_status)
+
+    def _init_openbb_gateway(self) -> None:
+        """Initialize OpenBB gateway for data fetching (Issue #28)."""
+        if not OPENBB_AVAILABLE:
+            self.query_one(LogViewer).log_message(
+                "OpenBB not installed - Data tab disabled (pip install openbb openbb-yfinance)",
+                "warning",
+            )
+            return
+
+        # Use Textual's worker system for async operations
+        self._connect_openbb_gateway()
+
+    @work(exclusive=True, group="openbb_init")
+    async def _connect_openbb_gateway(self) -> None:
+        """Connect OpenBB gateway (runs as Textual worker)."""
+        import asyncio
+        log = self.query_one(LogViewer)
+        log.log_message("Initializing OpenBB gateway...", "debug")
+        try:
+            self._openbb_gateway = OpenBBGateway()
+            await self._openbb_gateway.connect()
+            log.log_message("OpenBB Data Gateway connected", "success")
+
+            # Set gateway on dashboard - it will load data on its own
+            dashboard = self.query_one("#openbb-data-dashboard", OpenBBDataDashboard)
+            dashboard.set_gateway(self._openbb_gateway)
+
+            # Wait then trigger data load
+            await asyncio.sleep(1)
+            dashboard._load_equity_data("AAPL", "yfinance")
+
+        except Exception as e:
+            log.log_message(f"OpenBB error: {e}", "warning")
 
     def _setup_execution_engine(self) -> None:
         """Initialize the execution engine for algorithm-based orders (Issue #36)."""
@@ -748,6 +802,13 @@ class LibraApp(App):
 
         if self.gateway and self.gateway.is_connected:
             await self.gateway.disconnect()
+
+        # Disconnect OpenBB gateway (Issue #28)
+        if self._openbb_gateway:
+            try:
+                await self._openbb_gateway.disconnect()
+            except Exception:
+                pass
 
         self.exit()
 
