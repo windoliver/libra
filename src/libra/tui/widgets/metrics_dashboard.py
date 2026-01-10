@@ -99,7 +99,7 @@ class MetricCard(Static):
 
 
 class CounterPanel(Vertical):
-    """Panel showing counter metrics."""
+    """Panel showing counter metrics. PERFORMANCE: Uses differential updates."""
 
     DEFAULT_CSS = """
     CounterPanel {
@@ -122,31 +122,67 @@ class CounterPanel(Vertical):
     }
     """
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._cached_table: DataTable | None = None
+        self._row_keys: dict[str, Any] = {}
+
     def compose(self) -> ComposeResult:
         yield Static("COUNTERS", classes="panel-title")
         table = DataTable(id="counter-table")
         table.add_columns("Metric", "Value", "Rate/s")
         yield table
 
+    def on_mount(self) -> None:
+        """Cache table reference."""
+        self._cached_table = self.query_one("#counter-table", DataTable)
+
     def update_counters(self, counters: dict[str, MetricData]) -> None:
-        """Update counter display."""
+        """Update counter display using differential updates."""
+        table = self._cached_table
+        if not table:
+            return
+
+        for name, metric in counters.items():
+            # Format name (remove prefix)
+            short_name = name.split("_", 1)[-1] if "_" in name else name
+            value_str = f"{metric.value:,.0f}"
+            rate_str = f"{metric.value / max(1, metric.count):,.1f}" if metric.count > 0 else "-"
+
+            # PERFORMANCE: Differential update with proper error handling
+            if name in self._row_keys:
+                row_key = self._row_keys[name]
+                try:
+                    table.update_cell(row_key, "Value", value_str)
+                    table.update_cell(row_key, "Rate/s", rate_str)
+                except Exception:
+                    del self._row_keys[name]
+                    self._add_counter_row(name, short_name, value_str, rate_str)
+            else:
+                self._add_counter_row(name, short_name, value_str, rate_str)
+
+    def _add_counter_row(self, name: str, short_name: str, value_str: str, rate_str: str) -> None:
+        """Add a counter row, handling duplicates gracefully."""
+        table = self._cached_table
+        if not table:
+            return
         try:
-            table = self.query_one("#counter-table", DataTable)
-            table.clear()
-
-            for name, metric in counters.items():
-                # Format name (remove prefix)
-                short_name = name.split("_", 1)[-1] if "_" in name else name
-                value_str = f"{metric.value:,.0f}"
-                rate_str = f"{metric.value / max(1, metric.count):,.1f}" if metric.count > 0 else "-"
-
-                table.add_row(short_name, value_str, rate_str)
+            row_key = table.add_row(short_name, value_str, rate_str, key=name)
+            self._row_keys[name] = row_key
         except Exception:
-            pass
+            for rk in table.rows:
+                if rk.value == name:
+                    self._row_keys[name] = rk
+                    try:
+                        table.update_cell(rk, "Value", value_str)
+                        table.update_cell(rk, "Rate/s", rate_str)
+                    except Exception:
+                        pass
+                    break
 
 
 class GaugePanel(Vertical):
-    """Panel showing gauge metrics."""
+    """Panel showing gauge metrics. PERFORMANCE: Uses differential updates."""
 
     DEFAULT_CSS = """
     GaugePanel {
@@ -169,42 +205,76 @@ class GaugePanel(Vertical):
     }
     """
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._cached_table: DataTable | None = None
+        self._row_keys: dict[str, Any] = {}
+
     def compose(self) -> ComposeResult:
         yield Static("GAUGES", classes="panel-title")
         table = DataTable(id="gauge-table")
         table.add_columns("Metric", "Value")
         yield table
 
+    def on_mount(self) -> None:
+        """Cache table reference."""
+        self._cached_table = self.query_one("#gauge-table", DataTable)
+
     def update_gauges(self, gauges: dict[str, MetricData]) -> None:
-        """Update gauge display."""
-        try:
-            table = self.query_one("#gauge-table", DataTable)
-            table.clear()
+        """Update gauge display using differential updates."""
+        table = self._cached_table
+        if not table:
+            return
 
-            for name, metric in gauges.items():
-                short_name = name.split("_", 1)[-1] if "_" in name else name
+        for name, metric in gauges.items():
+            short_name = name.split("_", 1)[-1] if "_" in name else name
 
-                # Color code based on value
-                value = metric.value
-                if "queue" in name.lower() or "pending" in name.lower():
-                    # Queue size coloring
-                    if value > 1000:
-                        color = "red"
-                    elif value > 100:
-                        color = "yellow"
-                    else:
-                        color = "green"
-                    value_str = f"[{color}]{value:,.0f}[/{color}]"
+            # Color code based on value
+            value = metric.value
+            if "queue" in name.lower() or "pending" in name.lower():
+                # Queue size coloring
+                if value > 1000:
+                    color = "red"
+                elif value > 100:
+                    color = "yellow"
                 else:
-                    value_str = f"{value:,.2f}"
+                    color = "green"
+                value_str = f"[{color}]{value:,.0f}[/{color}]"
+            else:
+                value_str = f"{value:,.2f}"
 
-                table.add_row(short_name, value_str)
+            # PERFORMANCE: Differential update with proper error handling
+            if name in self._row_keys:
+                row_key = self._row_keys[name]
+                try:
+                    table.update_cell(row_key, "Value", value_str)
+                except Exception:
+                    del self._row_keys[name]
+                    self._add_gauge_row(name, short_name, value_str)
+            else:
+                self._add_gauge_row(name, short_name, value_str)
+
+    def _add_gauge_row(self, name: str, short_name: str, value_str: str) -> None:
+        """Add a gauge row, handling duplicates gracefully."""
+        table = self._cached_table
+        if not table:
+            return
+        try:
+            row_key = table.add_row(short_name, value_str, key=name)
+            self._row_keys[name] = row_key
         except Exception:
-            pass
+            for rk in table.rows:
+                if rk.value == name:
+                    self._row_keys[name] = rk
+                    try:
+                        table.update_cell(rk, "Value", value_str)
+                    except Exception:
+                        pass
+                    break
 
 
 class HistogramPanel(Vertical):
-    """Panel showing histogram metrics with percentiles."""
+    """Panel showing histogram metrics with percentiles. PERFORMANCE: Uses differential updates."""
 
     DEFAULT_CSS = """
     HistogramPanel {
@@ -227,36 +297,76 @@ class HistogramPanel(Vertical):
     }
     """
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._cached_table: DataTable | None = None
+        self._row_keys: dict[str, Any] = {}
+
     def compose(self) -> ComposeResult:
         yield Static("LATENCIES (ms)", classes="panel-title")
         table = DataTable(id="histogram-table")
         table.add_columns("Metric", "Count", "P50", "P95", "P99")
         yield table
 
+    def on_mount(self) -> None:
+        """Cache table reference."""
+        self._cached_table = self.query_one("#histogram-table", DataTable)
+
     def update_histograms(self, histograms: dict[str, MetricData]) -> None:
-        """Update histogram display."""
+        """Update histogram display using differential updates."""
+        table = self._cached_table
+        if not table:
+            return
+
+        for name, metric in histograms.items():
+            short_name = name.split("_", 1)[-1] if "_" in name else name
+            count_str = f"{metric.count:,}"
+
+            # Format percentiles (convert to ms)
+            p50_str = f"{metric.p50 * 1000:.2f}" if metric.p50 else "-"
+            p95_str = f"{metric.p95 * 1000:.2f}" if metric.p95 else "-"
+            p99_str = f"{metric.p99 * 1000:.2f}" if metric.p99 else "-"
+
+            # Color P99 if high
+            if metric.p99 and metric.p99 * 1000 > 100:  # >100ms
+                p99_str = f"[red]{p99_str}[/red]"
+            elif metric.p99 and metric.p99 * 1000 > 50:  # >50ms
+                p99_str = f"[yellow]{p99_str}[/yellow]"
+
+            # PERFORMANCE: Differential update with proper error handling
+            if name in self._row_keys:
+                row_key = self._row_keys[name]
+                try:
+                    table.update_cell(row_key, "Count", count_str)
+                    table.update_cell(row_key, "P50", p50_str)
+                    table.update_cell(row_key, "P95", p95_str)
+                    table.update_cell(row_key, "P99", p99_str)
+                except Exception:
+                    del self._row_keys[name]
+                    self._add_histogram_row(name, short_name, count_str, p50_str, p95_str, p99_str)
+            else:
+                self._add_histogram_row(name, short_name, count_str, p50_str, p95_str, p99_str)
+
+    def _add_histogram_row(self, name: str, short_name: str, count_str: str, p50_str: str, p95_str: str, p99_str: str) -> None:
+        """Add a histogram row, handling duplicates gracefully."""
+        table = self._cached_table
+        if not table:
+            return
         try:
-            table = self.query_one("#histogram-table", DataTable)
-            table.clear()
-
-            for name, metric in histograms.items():
-                short_name = name.split("_", 1)[-1] if "_" in name else name
-                count_str = f"{metric.count:,}"
-
-                # Format percentiles (convert to ms)
-                p50_str = f"{metric.p50 * 1000:.2f}" if metric.p50 else "-"
-                p95_str = f"{metric.p95 * 1000:.2f}" if metric.p95 else "-"
-                p99_str = f"{metric.p99 * 1000:.2f}" if metric.p99 else "-"
-
-                # Color P99 if high
-                if metric.p99 and metric.p99 * 1000 > 100:  # >100ms
-                    p99_str = f"[red]{p99_str}[/red]"
-                elif metric.p99 and metric.p99 * 1000 > 50:  # >50ms
-                    p99_str = f"[yellow]{p99_str}[/yellow]"
-
-                table.add_row(short_name, count_str, p50_str, p95_str, p99_str)
+            row_key = table.add_row(short_name, count_str, p50_str, p95_str, p99_str, key=name)
+            self._row_keys[name] = row_key
         except Exception:
-            pass
+            for rk in table.rows:
+                if rk.value == name:
+                    self._row_keys[name] = rk
+                    try:
+                        table.update_cell(rk, "Count", count_str)
+                        table.update_cell(rk, "P50", p50_str)
+                        table.update_cell(rk, "P95", p95_str)
+                        table.update_cell(rk, "P99", p99_str)
+                    except Exception:
+                        pass
+                    break
 
 
 class MetricsDashboard(Vertical):
@@ -268,6 +378,8 @@ class MetricsDashboard(Vertical):
     - Gauge metrics (queue sizes, handler counts)
     - Histogram metrics (latency percentiles)
     - System uptime
+
+    PERFORMANCE: Uses cached panel references.
 
     Example:
         dashboard = MetricsDashboard(id="metrics-dashboard")
@@ -306,6 +418,11 @@ class MetricsDashboard(Vertical):
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
         self._uptime = 0.0
+        # PERFORMANCE: Cache panel references
+        self._cached_uptime_display: Static | None = None
+        self._cached_counter_panel: CounterPanel | None = None
+        self._cached_gauge_panel: GaugePanel | None = None
+        self._cached_histogram_panel: HistogramPanel | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="header"):
@@ -319,9 +436,29 @@ class MetricsDashboard(Vertical):
         yield Rule()
         yield HistogramPanel(id="histogram-panel")
 
+    def on_mount(self) -> None:
+        """Cache panel references for performance."""
+        try:
+            self._cached_uptime_display = self.query_one("#uptime-display", Static)
+        except Exception:
+            pass
+        try:
+            self._cached_counter_panel = self.query_one("#counter-panel", CounterPanel)
+        except Exception:
+            pass
+        try:
+            self._cached_gauge_panel = self.query_one("#gauge-panel", GaugePanel)
+        except Exception:
+            pass
+        try:
+            self._cached_histogram_panel = self.query_one("#histogram-panel", HistogramPanel)
+        except Exception:
+            pass
+
     def update_from_collector(self, data: dict[str, Any]) -> None:
         """
         Update dashboard from MetricsCollector.collect() output.
+        PERFORMANCE: Uses cached panel references.
 
         Args:
             data: Output from collector.collect()
@@ -329,11 +466,9 @@ class MetricsDashboard(Vertical):
         # Update uptime
         uptime = data.get("uptime_seconds", 0)
         self._uptime = uptime
-        try:
+        if self._cached_uptime_display:
             uptime_str = self._format_uptime(uptime)
-            self.query_one("#uptime-display", Static).update(f"Uptime: {uptime_str}")
-        except Exception:
-            pass
+            self._cached_uptime_display.update(f"Uptime: {uptime_str}")
 
         # Convert collector data to MetricData
         counters = {}
@@ -364,21 +499,15 @@ class MetricsDashboard(Vertical):
                 count=hist_data.get("count", 0),
             )
 
-        # Update panels
-        try:
-            self.query_one("#counter-panel", CounterPanel).update_counters(counters)
-        except Exception:
-            pass
+        # Update panels using cached references
+        if self._cached_counter_panel:
+            self._cached_counter_panel.update_counters(counters)
 
-        try:
-            self.query_one("#gauge-panel", GaugePanel).update_gauges(gauges)
-        except Exception:
-            pass
+        if self._cached_gauge_panel:
+            self._cached_gauge_panel.update_gauges(gauges)
 
-        try:
-            self.query_one("#histogram-panel", HistogramPanel).update_histograms(histograms)
-        except Exception:
-            pass
+        if self._cached_histogram_panel:
+            self._cached_histogram_panel.update_histograms(histograms)
 
     def _format_uptime(self, seconds: float) -> str:
         """Format uptime for display."""

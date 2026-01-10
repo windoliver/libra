@@ -100,7 +100,7 @@ class HealthStatusBadge(Static):
 
 
 class ResourceGauge(Vertical):
-    """Resource usage gauge (CPU, memory, disk)."""
+    """Resource usage gauge (CPU, memory, disk). PERFORMANCE: Uses cached refs."""
 
     DEFAULT_CSS = """
     ResourceGauge {
@@ -138,6 +138,9 @@ class ResourceGauge(Vertical):
         super().__init__(id=id)
         self._label = label
         self._value = value
+        # PERFORMANCE: Cache widget refs
+        self._cached_bar: ProgressBar | None = None
+        self._cached_value_label: Static | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(self._label, classes="label")
@@ -146,16 +149,18 @@ class ResourceGauge(Vertical):
             yield Static(f"{self._value:.0f}%", classes="value", id="gauge-value")
 
     def on_mount(self) -> None:
+        self._cached_bar = self.query_one("#gauge-bar", ProgressBar)
+        self._cached_value_label = self.query_one("#gauge-value", Static)
         self.update_value(self._value)
 
     def update_value(self, value: float) -> None:
-        """Update the gauge value (0-100)."""
+        """Update the gauge value (0-100) using cached refs."""
         self._value = min(100, max(0, value))
-        try:
-            bar = self.query_one("#gauge-bar", ProgressBar)
-            bar.update(progress=self._value)
 
-            value_label = self.query_one("#gauge-value", Static)
+        if self._cached_bar:
+            self._cached_bar.update(progress=self._value)
+
+        if self._cached_value_label:
             # Color code based on value
             if self._value >= 90:
                 color = "red"
@@ -163,13 +168,11 @@ class ResourceGauge(Vertical):
                 color = "yellow"
             else:
                 color = "green"
-            value_label.update(f"[{color}]{self._value:.0f}%[/{color}]")
-        except Exception:
-            pass
+            self._cached_value_label.update(f"[{color}]{self._value:.0f}%[/{color}]")
 
 
 class SystemResourcesPanel(Vertical):
-    """Panel showing system resource usage."""
+    """Panel showing system resource usage. PERFORMANCE: Uses cached refs."""
 
     DEFAULT_CSS = """
     SystemResourcesPanel {
@@ -189,6 +192,12 @@ class SystemResourcesPanel(Vertical):
     }
     """
 
+    def __init__(self, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self._cached_cpu: ResourceGauge | None = None
+        self._cached_memory: ResourceGauge | None = None
+        self._cached_disk: ResourceGauge | None = None
+
     def compose(self) -> ComposeResult:
         yield Static("SYSTEM RESOURCES", classes="panel-title")
         yield Rule()
@@ -197,19 +206,24 @@ class SystemResourcesPanel(Vertical):
             yield ResourceGauge("Memory", id="memory-gauge")
             yield ResourceGauge("Disk", id="disk-gauge")
 
+    def on_mount(self) -> None:
+        self._cached_cpu = self.query_one("#cpu-gauge", ResourceGauge)
+        self._cached_memory = self.query_one("#memory-gauge", ResourceGauge)
+        self._cached_disk = self.query_one("#disk-gauge", ResourceGauge)
+
     def update_resources(
         self,
         cpu: float = 0.0,
         memory: float = 0.0,
         disk: float = 0.0,
     ) -> None:
-        """Update resource gauges."""
-        try:
-            self.query_one("#cpu-gauge", ResourceGauge).update_value(cpu)
-            self.query_one("#memory-gauge", ResourceGauge).update_value(memory)
-            self.query_one("#disk-gauge", ResourceGauge).update_value(disk)
-        except Exception:
-            pass
+        """Update resource gauges using cached refs."""
+        if self._cached_cpu:
+            self._cached_cpu.update_value(cpu)
+        if self._cached_memory:
+            self._cached_memory.update_value(memory)
+        if self._cached_disk:
+            self._cached_disk.update_value(disk)
 
 
 class ComponentHealthTable(Vertical):
@@ -324,6 +338,14 @@ class HealthMonitorWidget(Vertical):
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
         self._health_data: SystemHealthData | None = None
+        # PERFORMANCE: Cache widget refs
+        self._cached_badge: HealthStatusBadge | None = None
+        self._cached_last_check: Static | None = None
+        self._cached_summary_healthy: Static | None = None
+        self._cached_summary_degraded: Static | None = None
+        self._cached_summary_unhealthy: Static | None = None
+        self._cached_component_table: ComponentHealthTable | None = None
+        self._cached_resources_panel: SystemResourcesPanel | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="header"):
@@ -344,45 +366,53 @@ class HealthMonitorWidget(Vertical):
         yield Rule()
         yield ComponentHealthTable(id="component-table-panel")
 
+    def on_mount(self) -> None:
+        """Cache widget references for performance."""
+        try:
+            self._cached_badge = self.query_one("#health-badge", HealthStatusBadge)
+            self._cached_last_check = self.query_one("#last-check", Static)
+            self._cached_summary_healthy = self.query_one("#summary-healthy", Static)
+            self._cached_summary_degraded = self.query_one("#summary-degraded", Static)
+            self._cached_summary_unhealthy = self.query_one("#summary-unhealthy", Static)
+            self._cached_component_table = self.query_one("#component-table-panel", ComponentHealthTable)
+            self._cached_resources_panel = self.query_one("#resources-panel", SystemResourcesPanel)
+        except Exception:
+            pass
+
     def update_health(self, data: dict[str, Any]) -> None:
         """
-        Update from HealthMonitor.check_all() output.
+        Update from HealthMonitor.check_all() output using cached refs.
 
         Args:
             data: Output from monitor.check_all()
         """
         # Update overall status
         status = data.get("status", "unknown")
-        try:
-            self.query_one("#health-badge", HealthStatusBadge).update_status(status)
-        except Exception:
-            pass
+        if self._cached_badge:
+            self._cached_badge.update_status(status)
 
         # Update last check time
         timestamp = data.get("timestamp", 0)
-        if timestamp > 0:
+        if timestamp > 0 and self._cached_last_check:
             time_str = datetime.fromtimestamp(
                 timestamp, tz=timezone.utc
             ).strftime("%H:%M:%S")
-            try:
-                self.query_one("#last-check", Static).update(f"Last check: {time_str}")
-            except Exception:
-                pass
+            self._cached_last_check.update(f"Last check: {time_str}")
 
         # Update summary
         summary = data.get("summary", {})
-        try:
-            self.query_one("#summary-healthy", Static).update(
+        if self._cached_summary_healthy:
+            self._cached_summary_healthy.update(
                 f"[green]✓ Healthy: {summary.get('healthy', 0)}[/green]"
             )
-            self.query_one("#summary-degraded", Static).update(
+        if self._cached_summary_degraded:
+            self._cached_summary_degraded.update(
                 f"[yellow]⚠ Degraded: {summary.get('degraded', 0)}[/yellow]"
             )
-            self.query_one("#summary-unhealthy", Static).update(
+        if self._cached_summary_unhealthy:
+            self._cached_summary_unhealthy.update(
                 f"[red]✗ Unhealthy: {summary.get('unhealthy', 0)}[/red]"
             )
-        except Exception:
-            pass
 
         # Update components
         components = {}
@@ -397,24 +427,20 @@ class HealthMonitorWidget(Vertical):
                 details=comp_data.get("details", {}),
             )
 
-        try:
-            self.query_one("#component-table-panel", ComponentHealthTable).update_components(components)
-        except Exception:
-            pass
+        if self._cached_component_table:
+            self._cached_component_table.update_components(components)
 
         # Update resources from system components
         cpu_data = data.get("components", {}).get("system.cpu", {})
         mem_data = data.get("components", {}).get("system.memory", {})
         disk_data = data.get("components", {}).get("system.disk", {})
 
-        try:
-            self.query_one("#resources-panel", SystemResourcesPanel).update_resources(
+        if self._cached_resources_panel:
+            self._cached_resources_panel.update_resources(
                 cpu=cpu_data.get("details", {}).get("percent", 0),
                 memory=mem_data.get("details", {}).get("percent", 0),
                 disk=disk_data.get("details", {}).get("percent", 0),
             )
-        except Exception:
-            pass
 
 
 def create_demo_health_data() -> dict[str, Any]:

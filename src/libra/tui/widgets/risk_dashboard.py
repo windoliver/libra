@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Container, Vertical
-from textual.reactive import reactive
+from textual.reactive import reactive, var
 from textual.widgets import Label, ProgressBar, Sparkline, Static
 
 
@@ -116,6 +116,9 @@ class DrawdownGauge(Container):
 
     Shows current drawdown as percentage of maximum allowed,
     plus historical trend via sparkline.
+
+    PERFORMANCE: Uses var() for maximum since it's a config value that
+    shouldn't trigger UI refreshes. Uses cached widget references.
     """
 
     DEFAULT_CSS = """
@@ -152,8 +155,9 @@ class DrawdownGauge(Container):
     }
     """
 
+    # PERFORMANCE: Only current triggers refresh, maximum is config value
     current: reactive[float] = reactive(0.0)
-    maximum: reactive[float] = reactive(50.0)  # 50% max drawdown
+    maximum: var[float] = var(50.0)  # Config value - no refresh needed
 
     def __init__(
         self,
@@ -161,10 +165,15 @@ class DrawdownGauge(Container):
         maximum: float = 50.0,
         id: str = "drawdown-gauge",
     ) -> None:
+        # PERFORMANCE: Initialize cache attrs BEFORE super().__init__()
+        # because reactive watchers may be called during init
+        self._cached_bar: ProgressBar | None = None
+        self._cached_value_label: Static | None = None
+        self._cached_sparkline: Sparkline | None = None
+        self._history: list[float] = [0.0] * 20  # Last 20 data points
         super().__init__(id=id)
         self.current = current
         self.maximum = maximum
-        self._history: list[float] = [0.0] * 20  # Last 20 data points
 
     def compose(self) -> ComposeResult:
         yield Static("Drawdown", classes="gauge-label")
@@ -173,7 +182,10 @@ class DrawdownGauge(Container):
         yield Sparkline(self._history, summary_function=max, id="drawdown-sparkline")
 
     def on_mount(self) -> None:
-        """Initialize gauge on mount."""
+        """Initialize gauge on mount and cache widget references."""
+        self._cached_bar = self.query_one("#drawdown-bar", ProgressBar)
+        self._cached_value_label = self.query_one("#drawdown-value", Static)
+        self._cached_sparkline = self.query_one("#drawdown-sparkline", Sparkline)
         self._update_display()
 
     def watch_current(self, value: float) -> None:
@@ -181,19 +193,16 @@ class DrawdownGauge(Container):
         self._update_display()
 
     def _update_display(self) -> None:
-        """Update the gauge display."""
-        try:
-            # Update progress bar (percentage of max)
-            pct = min(abs(self.current) / self.maximum * 100, 100) if self.maximum > 0 else 0
-            bar = self.query_one("#drawdown-bar", ProgressBar)
-            bar.update(progress=pct)
+        """Update the gauge display using cached references."""
+        # Update progress bar (percentage of max)
+        pct = min(abs(self.current) / self.maximum * 100, 100) if self.maximum > 0 else 0
 
-            # Update value label
-            value_label = self.query_one("#drawdown-value", Static)
+        if self._cached_bar:
+            self._cached_bar.update(progress=pct)
+
+        if self._cached_value_label:
             color = "green" if self.current < self.maximum * 0.5 else "yellow" if self.current < self.maximum * 0.8 else "red"
-            value_label.update(f"[{color}]{self.current:.1f}%[/{color}] / {self.maximum:.0f}% max")
-        except Exception:
-            pass
+            self._cached_value_label.update(f"[{color}]{self.current:.1f}%[/{color}] / {self.maximum:.0f}% max")
 
     def update_value(self, current: float, maximum: float | None = None) -> None:
         """Update the drawdown value."""
@@ -206,11 +215,8 @@ class DrawdownGauge(Container):
         if len(self._history) > 20:
             self._history.pop(0)
 
-        try:
-            sparkline = self.query_one("#drawdown-sparkline", Sparkline)
-            sparkline.data = self._history
-        except Exception:
-            pass
+        if self._cached_sparkline:
+            self._cached_sparkline.data = self._history
 
 
 # =============================================================================
@@ -223,6 +229,7 @@ class ExposureBar(Container):
     Position exposure bar for a single symbol.
 
     Shows current position size as percentage of limit.
+    PERFORMANCE: Uses cached widget references.
     """
 
     DEFAULT_CSS = """
@@ -258,6 +265,9 @@ class ExposureBar(Container):
         self._symbol_id = symbol.replace("/", "-")  # Sanitized for use in IDs
         self._current = current
         self._limit = limit
+        # PERFORMANCE: Cache widget references
+        self._cached_bar: ProgressBar | None = None
+        self._cached_value: Static | None = None
 
     def compose(self) -> ComposeResult:
         yield Static(f"  {self._symbol}", classes="exposure-label")
@@ -265,21 +275,21 @@ class ExposureBar(Container):
         yield Static("", id=f"value-{self._symbol_id}", classes="exposure-value")
 
     def on_mount(self) -> None:
-        """Initialize on mount."""
+        """Initialize on mount and cache widget references."""
+        self._cached_bar = self.query_one(f"#bar-{self._symbol_id}", ProgressBar)
+        self._cached_value = self.query_one(f"#value-{self._symbol_id}", Static)
         self._update_display()
 
     def _update_display(self) -> None:
-        """Update the exposure display."""
-        try:
-            pct = min(self._current / self._limit * 100, 100) if self._limit > 0 else 0
-            bar = self.query_one(f"#bar-{self._symbol_id}", ProgressBar)
-            bar.update(progress=pct)
+        """Update the exposure display using cached references."""
+        pct = min(self._current / self._limit * 100, 100) if self._limit > 0 else 0
 
-            value = self.query_one(f"#value-{self._symbol_id}", Static)
+        if self._cached_bar:
+            self._cached_bar.update(progress=pct)
+
+        if self._cached_value:
             color = "green" if pct < 50 else "yellow" if pct < 80 else "red"
-            value.update(f"[{color}]{self._current:.0f}%[/{color}] / {self._limit:.0f}%")
-        except Exception:
-            pass
+            self._cached_value.update(f"[{color}]{self._current:.0f}%[/{color}] / {self._limit:.0f}%")
 
     def update_value(self, current: float, limit: float | None = None) -> None:
         """Update the exposure values."""
@@ -299,6 +309,7 @@ class OrderRateIndicator(Static):
     Order rate indicator showing current rate vs limit.
 
     Uses dot visualization: filled dots = used, empty dots = available
+    PERFORMANCE: Uses var() for limit since it's config, not UI state.
     """
 
     DEFAULT_CSS = """
@@ -308,8 +319,9 @@ class OrderRateIndicator(Static):
     }
     """
 
+    # PERFORMANCE: Only current triggers refresh, limit is config value
     current: reactive[int] = reactive(0)
-    limit: reactive[int] = reactive(10)
+    limit: var[int] = var(10)  # Config value - no refresh needed
 
     def __init__(self, current: int = 0, limit: int = 10, id: str = "order-rate") -> None:
         super().__init__(id=id)
@@ -326,9 +338,9 @@ class OrderRateIndicator(Static):
 
     def update_rate(self, current: int, limit: int | None = None) -> None:
         """Update the rate values."""
-        self.current = current
         if limit is not None:
             self.limit = limit
+        self.current = current  # Set current last to trigger single refresh
 
 
 # =============================================================================
@@ -396,6 +408,7 @@ class RiskDashboard(Container):
         - Position exposure bars
         - Order rate indicator
         - Circuit breaker status
+        - PERFORMANCE: Cached widget references
 
     Usage:
         dashboard = RiskDashboard()
@@ -450,6 +463,14 @@ class RiskDashboard(Container):
         """
         super().__init__(id=id)
         self._symbols = symbols or ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+        # PERFORMANCE: Cache widget references
+        self._cached_trading_state: TradingStateIndicator | None = None
+        self._cached_drawdown_gauge: DrawdownGauge | None = None
+        self._cached_daily_pnl_bar: ProgressBar | None = None
+        self._cached_daily_pnl_value: Static | None = None
+        self._cached_order_rate: OrderRateIndicator | None = None
+        self._cached_circuit_breaker: CircuitBreakerIndicator | None = None
+        self._cached_exposure_bars: dict[str, ExposureBar] = {}
 
     def compose(self) -> ComposeResult:
         yield Static("RISK STATUS", classes="dashboard-title")
@@ -486,63 +507,82 @@ class RiskDashboard(Container):
         # Circuit breaker
         yield CircuitBreakerIndicator()
 
+    def on_mount(self) -> None:
+        """Cache widget references for performance."""
+        try:
+            self._cached_trading_state = self.query_one(TradingStateIndicator)
+        except Exception:
+            pass
+        try:
+            self._cached_drawdown_gauge = self.query_one(DrawdownGauge)
+        except Exception:
+            pass
+        try:
+            self._cached_daily_pnl_bar = self.query_one("#daily-pnl-bar", ProgressBar)
+        except Exception:
+            pass
+        try:
+            self._cached_daily_pnl_value = self.query_one("#daily-pnl-value", Static)
+        except Exception:
+            pass
+        try:
+            self._cached_order_rate = self.query_one(OrderRateIndicator)
+        except Exception:
+            pass
+        try:
+            self._cached_circuit_breaker = self.query_one(CircuitBreakerIndicator)
+        except Exception:
+            pass
+        # Cache exposure bars
+        for symbol in self._symbols:
+            try:
+                bar_id = f"exposure-{symbol.replace('/', '-')}"
+                self._cached_exposure_bars[symbol] = self.query_one(f"#{bar_id}", ExposureBar)
+            except Exception:
+                pass
+
     # =========================================================================
-    # Update Methods
+    # Update Methods (using cached references)
     # =========================================================================
 
     def set_trading_state(self, state: str) -> None:
-        """Update the trading state display."""
-        try:
-            self.query_one(TradingStateIndicator).set_state(state)
-        except Exception:
-            pass
+        """Update the trading state display using cached reference."""
+        if self._cached_trading_state:
+            self._cached_trading_state.set_state(state)
 
     def set_drawdown(self, current: float, maximum: float | None = None) -> None:
-        """Update the drawdown display."""
-        try:
-            gauge = self.query_one(DrawdownGauge)
-            gauge.update_value(current, maximum)
-        except Exception:
-            pass
+        """Update the drawdown display using cached reference."""
+        if self._cached_drawdown_gauge:
+            self._cached_drawdown_gauge.update_value(current, maximum)
 
     def set_daily_pnl(self, current: float, limit: float) -> None:
-        """Update the daily P&L display."""
-        try:
-            # Calculate percentage of limit used
-            pct = min(abs(current) / limit * 100, 100) if limit > 0 else 0
+        """Update the daily P&L display using cached references."""
+        # Calculate percentage of limit used
+        pct = min(abs(current) / limit * 100, 100) if limit > 0 else 0
 
-            bar = self.query_one("#daily-pnl-bar", ProgressBar)
-            bar.update(progress=pct)
+        if self._cached_daily_pnl_bar:
+            self._cached_daily_pnl_bar.update(progress=pct)
 
-            value = self.query_one("#daily-pnl-value", Static)
+        if self._cached_daily_pnl_value:
             color = "green" if current >= 0 else "yellow" if abs(current) < limit * 0.5 else "red"
             sign = "+" if current >= 0 else ""
-            value.update(f"[{color}]{sign}${current:,.0f}[/{color}] / ${limit:,.0f} limit")
-        except Exception:
-            pass
+            self._cached_daily_pnl_value.update(f"[{color}]{sign}${current:,.0f}[/{color}] / ${limit:,.0f} limit")
 
     def set_exposure(self, symbol: str, current: float, limit: float | None = None) -> None:
-        """Update a symbol's exposure display."""
-        try:
-            bar_id = f"exposure-{symbol.replace('/', '-')}"
-            exposure_bar = self.query_one(f"#{bar_id}", ExposureBar)
+        """Update a symbol's exposure display using cached reference."""
+        exposure_bar = self._cached_exposure_bars.get(symbol)
+        if exposure_bar:
             exposure_bar.update_value(current, limit)
-        except Exception:
-            pass
 
     def set_order_rate(self, current: int, limit: int | None = None) -> None:
-        """Update the order rate display."""
-        try:
-            self.query_one(OrderRateIndicator).update_rate(current, limit)
-        except Exception:
-            pass
+        """Update the order rate display using cached reference."""
+        if self._cached_order_rate:
+            self._cached_order_rate.update_rate(current, limit)
 
     def set_circuit_breaker(self, state: str, reason: str = "") -> None:
-        """Update the circuit breaker display."""
-        try:
-            self.query_one(CircuitBreakerIndicator).update_status(state, reason)
-        except Exception:
-            pass
+        """Update the circuit breaker display using cached reference."""
+        if self._cached_circuit_breaker:
+            self._cached_circuit_breaker.update_status(state, reason)
 
     def update_from_risk_manager(self, risk_manager: RiskManager) -> None:
         """

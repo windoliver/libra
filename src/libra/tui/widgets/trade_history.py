@@ -216,6 +216,11 @@ class TradeHistoryTable(Container):
         self._filtered_trades: list[TradeRecord] = []
         self._title = title
         self._row_to_trade: dict[RowKey, TradeRecord] = {}
+        # PERFORMANCE: Cache widget references
+        self._cached_table: DataTable | None = None
+        self._cached_footer: Static | None = None
+        self._cached_side_select: Select | None = None
+        self._cached_symbol_input: Input | None = None
 
     def compose(self) -> ComposeResult:
         # Header with title and filters
@@ -243,18 +248,28 @@ class TradeHistoryTable(Container):
         yield Static(self._get_footer_text(), id="table-footer", classes="table-footer")
 
     def on_mount(self) -> None:
-        """Set up the table on mount."""
-        table = self.query_one("#trades-table", DataTable)
+        """Set up the table on mount and cache widget references."""
+        # PERFORMANCE: Cache all frequently-used widget references
+        self._cached_table = self.query_one("#trades-table", DataTable)
+        self._cached_footer = self.query_one("#table-footer", Static)
+        try:
+            self._cached_side_select = self.query_one("#filter-side", Select)
+        except Exception:
+            pass
+        try:
+            self._cached_symbol_input = self.query_one("#filter-symbol", Input)
+        except Exception:
+            pass
 
         # Add columns with sort indicators
-        table.add_column("Time ▼", key="time")
-        table.add_column("Symbol", key="symbol")
-        table.add_column("Side", key="side")
-        table.add_column("Entry", key="entry")
-        table.add_column("Exit", key="exit")
-        table.add_column("P&L", key="pnl")
-        table.add_column("P&L %", key="pnl_pct")
-        table.add_column("Duration", key="duration")
+        self._cached_table.add_column("Time ▼", key="time")
+        self._cached_table.add_column("Symbol", key="symbol")
+        self._cached_table.add_column("Side", key="side")
+        self._cached_table.add_column("Entry", key="entry")
+        self._cached_table.add_column("Exit", key="exit")
+        self._cached_table.add_column("P&L", key="pnl")
+        self._cached_table.add_column("P&L %", key="pnl_pct")
+        self._cached_table.add_column("Duration", key="duration")
 
         # Populate table
         self._apply_filters()
@@ -325,15 +340,18 @@ class TradeHistoryTable(Container):
         self._filtered_trades.sort(key=key_func, reverse=reverse)
 
     def _populate_table(self) -> None:
-        """Populate table with filtered and sorted trades."""
-        table = self.query_one("#trades-table", DataTable)
+        """Populate table with filtered and sorted trades using cached reference."""
+        table = self._cached_table
+        if not table:
+            return
+
         table.clear()
         self._row_to_trade.clear()
 
         for trade in self._filtered_trades:
             # Format values
             time_str = trade.entry_time.strftime("%Y-%m-%d %H:%M")
-            side_str = f"[green]LONG[/green]" if trade.side == TradeSide.LONG else "[red]SHORT[/red]"
+            side_str = "[green]LONG[/green]" if trade.side == TradeSide.LONG else "[red]SHORT[/red]"
             entry_str = f"${trade.entry_price:,.2f}"
             exit_str = f"${trade.exit_price:,.2f}" if trade.exit_price else "-"
 
@@ -358,16 +376,15 @@ class TradeHistoryTable(Container):
             )
             self._row_to_trade[row_key] = trade
 
-        # Update footer
-        try:
-            footer = self.query_one("#table-footer", Static)
-            footer.update(self._get_footer_text())
-        except Exception:
-            pass
+        # Update footer using cached reference
+        if self._cached_footer:
+            self._cached_footer.update(self._get_footer_text())
 
     def _update_column_headers(self) -> None:
-        """Update column headers with sort indicators."""
-        table = self.query_one("#trades-table", DataTable)
+        """Update column headers with sort indicators using cached reference."""
+        table = self._cached_table
+        if not table:
+            return
 
         # Map columns to sort columns
         column_map = {
@@ -467,21 +484,16 @@ class TradeHistoryTable(Container):
         self._populate_table()
 
     def action_clear_filters(self) -> None:
-        """Clear all filters."""
+        """Clear all filters using cached references."""
         self.filter_side = FilterSide.ALL
         self.filter_symbol = ""
 
-        try:
-            side_select = self.query_one("#filter-side", Select)
-            side_select.value = FilterSide.ALL
-        except Exception:
-            pass
+        # Use cached references
+        if self._cached_side_select:
+            self._cached_side_select.value = FilterSide.ALL
 
-        try:
-            symbol_input = self.query_one("#filter-symbol", Input)
-            symbol_input.value = ""
-        except Exception:
-            pass
+        if self._cached_symbol_input:
+            self._cached_symbol_input.value = ""
 
         self._apply_filters()
         self._populate_table()

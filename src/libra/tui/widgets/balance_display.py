@@ -7,7 +7,7 @@ Professional styling with border title and zebra stripes.
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -26,6 +26,7 @@ class BalanceDisplay(Vertical, can_focus=False):
     - Border title "BALANCES"
     - Zebra stripes for readability
     - Non-focusable to prevent stealing input focus
+    - PERFORMANCE: Differential updates instead of clear+rebuild
 
     Columns: Currency, Total, Available, Locked, %Used
     """
@@ -49,6 +50,12 @@ class BalanceDisplay(Vertical, can_focus=False):
 
     BORDER_TITLE = "BALANCES"
 
+    def __init__(self, id: str | None = None) -> None:
+        super().__init__(id=id)
+        # PERFORMANCE: Cache table reference and track row keys
+        self._cached_table: DataTable | None = None
+        self._row_keys: dict[str, Any] = {}  # currency -> row_key
+
     def compose(self) -> ComposeResult:
         """Create child widgets."""
         table = DataTable(id="balance-table")
@@ -58,19 +65,20 @@ class BalanceDisplay(Vertical, can_focus=False):
         yield table
 
     def on_mount(self) -> None:
-        """Initialize the data table."""
-        table = self.query_one(DataTable)
-        table.add_columns("Currency", "Total", "Available", "Locked", "%Used")
+        """Initialize the data table and cache reference."""
+        self._cached_table = self.query_one(DataTable)
+        self._cached_table.add_columns("Currency", "Total", "Available", "Locked", "%Used")
 
     def update_balances(self, balances: dict[str, Balance]) -> None:
         """
-        Update the balance display with new data.
+        Update the balance display with new data using differential updates.
 
         Args:
             balances: Dictionary mapping currency to Balance objects.
         """
-        table = self.query_one(DataTable)
-        table.clear()
+        table = self._cached_table
+        if not table:
+            return
 
         for currency, balance in sorted(balances.items()):
             used_pct = (
@@ -86,7 +94,8 @@ class BalanceDisplay(Vertical, can_focus=False):
             elif used_pct > 50:
                 pct_str = f"[yellow]{pct_str}[/yellow]"
 
-            table.add_row(
+            # PERFORMANCE: Use differential update instead of clear+rebuild
+            self.update_balance_row(
                 currency,
                 f"{balance.total:,.2f}",
                 f"{balance.available:,.2f}",
@@ -94,10 +103,76 @@ class BalanceDisplay(Vertical, can_focus=False):
                 pct_str,
             )
 
+    def update_balance_row(
+        self,
+        currency: str,
+        total: str,
+        available: str,
+        locked: str,
+        pct_used: str,
+    ) -> None:
+        """
+        PERFORMANCE: Update a single balance row differentially.
+
+        If row exists, update cells. If not, add new row.
+        This avoids expensive clear+rebuild pattern.
+        """
+        table = self._cached_table
+        if not table:
+            return
+
+        if currency in self._row_keys:
+            # Update existing row cells
+            row_key = self._row_keys[currency]
+            try:
+                table.update_cell(row_key, "Total", total)
+                table.update_cell(row_key, "Available", available)
+                table.update_cell(row_key, "Locked", locked)
+                table.update_cell(row_key, "%Used", pct_used)
+            except Exception:
+                # Row was removed from table, clear stale tracking
+                del self._row_keys[currency]
+                self._add_balance_row(currency, total, available, locked, pct_used)
+        else:
+            self._add_balance_row(currency, total, available, locked, pct_used)
+
+    def _add_balance_row(
+        self,
+        currency: str,
+        total: str,
+        available: str,
+        locked: str,
+        pct_used: str,
+    ) -> None:
+        """Add a new balance row, handling duplicates gracefully."""
+        table = self._cached_table
+        if not table:
+            return
+        try:
+            row_key = table.add_row(currency, total, available, locked, pct_used, key=currency)
+            self._row_keys[currency] = row_key
+        except Exception:
+            # Key already exists - sync our tracking and try update
+            # Find the row key by iterating (fallback)
+            for rk in table.rows:
+                if rk.value == currency:
+                    self._row_keys[currency] = rk
+                    try:
+                        table.update_cell(rk, "Total", total)
+                        table.update_cell(rk, "Available", available)
+                        table.update_cell(rk, "Locked", locked)
+                        table.update_cell(rk, "%Used", pct_used)
+                    except Exception:
+                        pass
+                    break
+
     def set_demo_data(self) -> None:
         """Set demo data for standalone mode."""
-        table = self.query_one(DataTable)
+        table = self._cached_table
+        if not table:
+            return
         table.clear()
-        table.add_row("USDT", "10,000.00", "8,500.00", "1,500.00", "[green]15.0%[/green]")
-        table.add_row("BTC", "0.50000", "0.50000", "0.00000", "[green]0.0%[/green]")
-        table.add_row("ETH", "5.00000", "3.00000", "2.00000", "[yellow]40.0%[/yellow]")
+        self._row_keys.clear()
+        self.update_balance_row("USDT", "10,000.00", "8,500.00", "1,500.00", "[green]15.0%[/green]")
+        self.update_balance_row("BTC", "0.50000", "0.50000", "0.00000", "[green]0.0%[/green]")
+        self.update_balance_row("ETH", "5.00000", "3.00000", "2.00000", "[yellow]40.0%[/yellow]")

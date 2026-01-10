@@ -6,7 +6,7 @@ Professional styling with border title, zebra stripes, and color-coded P&L.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -26,6 +26,7 @@ class PositionDisplay(Vertical, can_focus=False):
     - Zebra stripes for readability
     - Color-coded: green for LONG/profit, red for SHORT/loss
     - Non-focusable to prevent stealing input focus
+    - PERFORMANCE: Differential updates instead of clear+rebuild
 
     Columns: Symbol, Side, Size, Entry, Current, P&L, P&L%
     """
@@ -50,6 +51,9 @@ class PositionDisplay(Vertical, can_focus=False):
 
     def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
+        # PERFORMANCE: Cache table reference and track row keys
+        self._cached_table: DataTable | None = None
+        self._row_keys: dict[str, Any] = {}  # symbol -> row_key
 
     def compose(self) -> ComposeResult:
         """Create child widgets."""
@@ -60,19 +64,20 @@ class PositionDisplay(Vertical, can_focus=False):
         yield table
 
     def on_mount(self) -> None:
-        """Initialize the data table."""
-        table = self.query_one(DataTable)
-        table.add_columns("Symbol", "Side", "Size", "Entry", "Current", "P&L", "P&L%")
+        """Initialize the data table and cache reference."""
+        self._cached_table = self.query_one(DataTable)
+        self._cached_table.add_columns("Symbol", "Side", "Size", "Entry", "Current", "P&L", "P&L%")
 
     def update_positions(self, positions: list[Position]) -> None:
         """
-        Update the position display with new data.
+        Update the position display with new data using differential updates.
 
         Args:
             positions: List of Position objects.
         """
-        table = self.query_one(DataTable)
-        table.clear()
+        table = self._cached_table
+        if not table:
+            return
 
         for pos in positions:
             pnl = pos.unrealized_pnl
@@ -95,7 +100,8 @@ class PositionDisplay(Vertical, can_focus=False):
             else:
                 side_str = side
 
-            table.add_row(
+            # PERFORMANCE: Use differential update instead of clear+rebuild
+            self._update_position_row(
                 pos.symbol,
                 side_str,
                 f"{pos.amount:,.4f}",
@@ -105,11 +111,83 @@ class PositionDisplay(Vertical, can_focus=False):
                 pnl_pct_str,
             )
 
+    def _update_position_row(
+        self,
+        symbol: str,
+        side: str,
+        size: str,
+        entry: str,
+        current: str,
+        pnl: str,
+        pnl_pct: str,
+    ) -> None:
+        """
+        PERFORMANCE: Update a single position row differentially.
+
+        If row exists, update cells. If not, add new row.
+        """
+        table = self._cached_table
+        if not table:
+            return
+
+        if symbol in self._row_keys:
+            # Update existing row cells
+            row_key = self._row_keys[symbol]
+            try:
+                table.update_cell(row_key, "Side", side)
+                table.update_cell(row_key, "Size", size)
+                table.update_cell(row_key, "Entry", entry)
+                table.update_cell(row_key, "Current", current)
+                table.update_cell(row_key, "P&L", pnl)
+                table.update_cell(row_key, "P&L%", pnl_pct)
+            except Exception:
+                # Row was removed from table, clear stale tracking
+                del self._row_keys[symbol]
+                self._add_position_row(symbol, side, size, entry, current, pnl, pnl_pct)
+        else:
+            self._add_position_row(symbol, side, size, entry, current, pnl, pnl_pct)
+
+    def _add_position_row(
+        self,
+        symbol: str,
+        side: str,
+        size: str,
+        entry: str,
+        current: str,
+        pnl: str,
+        pnl_pct: str,
+    ) -> None:
+        """Add a new position row, handling duplicates gracefully."""
+        table = self._cached_table
+        if not table:
+            return
+        try:
+            row_key = table.add_row(symbol, side, size, entry, current, pnl, pnl_pct, key=symbol)
+            self._row_keys[symbol] = row_key
+        except Exception:
+            # Key already exists - sync our tracking and try update
+            for rk in table.rows:
+                if rk.value == symbol:
+                    self._row_keys[symbol] = rk
+                    try:
+                        table.update_cell(rk, "Side", side)
+                        table.update_cell(rk, "Size", size)
+                        table.update_cell(rk, "Entry", entry)
+                        table.update_cell(rk, "Current", current)
+                        table.update_cell(rk, "P&L", pnl)
+                        table.update_cell(rk, "P&L%", pnl_pct)
+                    except Exception:
+                        pass
+                    break
+
     def set_demo_data(self) -> None:
         """Set demo data for standalone mode."""
-        table = self.query_one(DataTable)
+        table = self._cached_table
+        if not table:
+            return
         table.clear()
-        table.add_row(
+        self._row_keys.clear()
+        self._update_position_row(
             "BTC/USDT",
             "[green]LONG[/green]",
             "0.1000",
@@ -118,7 +196,7 @@ class PositionDisplay(Vertical, can_focus=False):
             "[green]+125.00[/green]",
             "[green]+2.50%[/green]",
         )
-        table.add_row(
+        self._update_position_row(
             "ETH/USDT",
             "[red]SHORT[/red]",
             "2.0000",
@@ -127,7 +205,7 @@ class PositionDisplay(Vertical, can_focus=False):
             "[red]-90.00[/red]",
             "[red]-1.50%[/red]",
         )
-        table.add_row(
+        self._update_position_row(
             "SOL/USDT",
             "[green]LONG[/green]",
             "10.000",

@@ -46,6 +46,7 @@ class LogViewer(Vertical, can_focus=False):
     - Auto-scrolls to bottom
     - Max 500 lines (older entries removed)
     - Color-coded by priority/level
+    - PERFORMANCE: Cached RichLog reference to avoid DOM traversal
 
     Color scheme:
     - RISK events: red bold
@@ -85,6 +86,11 @@ class LogViewer(Vertical, can_focus=False):
 
     MAX_LINES = 500
 
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # PERFORMANCE: Cache RichLog reference to avoid repeated query_one calls
+        self._cached_log: RichLog | None = None
+
     def compose(self) -> ComposeResult:
         """Create child widgets."""
         yield Static("EVENT LOG")
@@ -98,19 +104,26 @@ class LogViewer(Vertical, can_focus=False):
         )
 
     def on_mount(self) -> None:
-        """Configure RichLog after mounting."""
-        log = self.query_one(RichLog)
-        log.can_focus = False  # Prevent focus stealing
-        log.auto_links = False  # Don't capture clicks for links
+        """Configure RichLog after mounting and cache reference."""
+        self._cached_log = self.query_one(RichLog)
+        self._cached_log.can_focus = False  # Prevent focus stealing
+        self._cached_log.auto_links = False  # Don't capture clicks for links
+
+    def _get_log(self) -> RichLog | None:
+        """Get cached RichLog reference."""
+        return self._cached_log
 
     def log_event(self, event: Event) -> None:
         """
-        Log an event to the viewer.
+        Log an event to the viewer using cached reference.
 
         Args:
             event: The event to log.
         """
-        log = self.query_one(RichLog)
+        log = self._cached_log
+        if not log:
+            return
+
         timestamp = datetime.fromtimestamp(
             event.timestamp_sec, tz=timezone.utc
         ).strftime("%H:%M:%S")
@@ -137,13 +150,16 @@ class LogViewer(Vertical, can_focus=False):
         level: str = "info",
     ) -> None:
         """
-        Log a plain message.
+        Log a plain message using cached reference.
 
         Args:
             message: The message to log.
             level: Log level (info, warning, error, success, debug).
         """
-        log = self.query_one(RichLog)
+        log = self._cached_log
+        if not log:
+            return
+
         timestamp = datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
         color = LEVEL_COLORS.get(level, "white")
 
@@ -151,8 +167,9 @@ class LogViewer(Vertical, can_focus=False):
 
     def clear_log(self) -> None:
         """Clear all log entries."""
-        log = self.query_one(RichLog)
-        log.clear()
+        log = self._cached_log
+        if log:
+            log.clear()
 
     def get_log_text(self, max_lines: int = 50) -> str:
         """
@@ -164,9 +181,11 @@ class LogViewer(Vertical, can_focus=False):
         Returns:
             Plain text of log entries, one per line.
         """
-        log = self.query_one(RichLog)
-        lines = []
+        log = self._cached_log
+        if not log:
+            return ""
 
+        lines = []
         for line in log.lines[-max_lines:]:
             # Each line is a Strip, extract text from segments
             try:

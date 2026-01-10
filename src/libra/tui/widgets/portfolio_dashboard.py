@@ -757,10 +757,18 @@ class PortfolioDashboard(Container):
         data: PortfolioData | None = None,
         bus: "MessageBus | None" = None,
         id: str | None = None,
+        auto_update: bool = False,  # PERFORMANCE: Disable self-timer by default
     ) -> None:
         super().__init__(id=id)
         self._data = data or PortfolioData()
         self.bus = bus
+        self._auto_update = auto_update  # Only enable timer if explicitly requested
+        # PERFORMANCE: Cache widget references
+        self._cached_total_card: TotalValueCard | None = None
+        self._cached_pnl_card: DailyPnLCard | None = None
+        self._cached_alloc_bar: AllocationBar | None = None
+        self._cached_asset_table: AssetAllocationTable | None = None
+        self._cached_period_returns: PeriodReturns | None = None
 
     def compose(self) -> ComposeResult:
         yield Static("PORTFOLIO OVERVIEW", classes="dashboard-title")
@@ -790,52 +798,77 @@ class PortfolioDashboard(Container):
 
     def on_mount(self) -> None:
         """Setup real-time updates."""
+        # PERFORMANCE: Cache widget references on mount
+        self._cache_widget_refs()
+
         # Initial data sync
         self._sync_all_widgets()
 
-        # If no bus, use demo mode with periodic updates
-        if self.bus is None:
+        # PERFORMANCE: Only start self-timer if auto_update enabled
+        # When embedded in LibraApp, the main app handles updates
+        if self._auto_update and self.bus is None:
             self.set_interval(2.0, self._simulate_update)
 
-    def _sync_all_widgets(self) -> None:
-        """Sync all child widgets with current data."""
+    def _cache_widget_refs(self) -> None:
+        """Cache widget references to avoid DOM traversal."""
         try:
-            # Total value
-            total_card = self.query_one("#total-value-card", TotalValueCard)
-            total_card.update_data(
+            self._cached_total_card = self.query_one("#total-value-card", TotalValueCard)
+        except Exception:
+            pass
+        try:
+            self._cached_pnl_card = self.query_one("#daily-pnl-card", DailyPnLCard)
+        except Exception:
+            pass
+        try:
+            self._cached_alloc_bar = self.query_one("#allocation-bar", AllocationBar)
+        except Exception:
+            pass
+        try:
+            self._cached_asset_table = self.query_one("#asset-table", AssetAllocationTable)
+        except Exception:
+            pass
+        try:
+            self._cached_period_returns = self.query_one("#period-returns", PeriodReturns)
+        except Exception:
+            pass
+
+    def _sync_all_widgets(self) -> None:
+        """Sync all child widgets with current data using cached references."""
+        # PERFORMANCE: Use cached refs instead of query_one
+        # Total value
+        if self._cached_total_card:
+            self._cached_total_card.update_data(
                 value=self._data.total_value,
                 history=self._data.equity_history,
             )
 
-            # Daily P&L
-            pnl_card = self.query_one("#daily-pnl-card", DailyPnLCard)
-            pnl_card.update_data(
+        # Daily P&L
+        if self._cached_pnl_card:
+            self._cached_pnl_card.update_data(
                 pnl=self._data.daily_pnl,
                 pnl_pct=self._data.daily_pnl_pct,
                 unrealized=self._data.unrealized_pnl,
                 realized=self._data.realized_pnl,
             )
 
-            # Allocation bar
-            alloc_bar = self.query_one("#allocation-bar", AllocationBar)
-            alloc_bar.update_allocations(
+        # Allocation bar
+        if self._cached_alloc_bar:
+            self._cached_alloc_bar.update_allocations(
                 [(h.symbol, h.pct_of_portfolio) for h in self._data.holdings]
             )
 
-            # Asset table
-            asset_table = self.query_one("#asset-table", AssetAllocationTable)
-            asset_table.update_holdings(self._data.holdings)
+        # Asset table
+        if self._cached_asset_table:
+            self._cached_asset_table.update_holdings(self._data.holdings)
 
-            # Period returns
-            period_returns = self.query_one("#period-returns", PeriodReturns)
-            period_returns.update_returns(
+        # Period returns
+        if self._cached_period_returns:
+            self._cached_period_returns.update_returns(
                 daily=self._data.daily_pnl,
                 weekly=self._data.weekly_pnl,
                 monthly=self._data.monthly_pnl,
                 ytd=self._data.ytd_pnl,
             )
-        except Exception:
-            pass
 
     def update_portfolio(self, data: PortfolioData) -> None:
         """Update portfolio with new data."""
