@@ -84,6 +84,9 @@ from libra.tui.widgets import (
     # Prediction Market Dashboard (Issue #39)
     PredictionMarketDashboard,
     create_demo_prediction_markets,
+    # Whale Alerts Dashboard (Issue #38)
+    WhaleAlertsDashboard,
+    create_demo_whale_alerts,
 )
 from libra.tui.widgets.openbb_data import OpenBBDataDashboard
 
@@ -298,6 +301,7 @@ class LibraApp(App):
         self._cached_health_monitor: HealthMonitorWidget | None = None
         self._cached_metrics_dashboard: MetricsDashboard | None = None
         self._cached_prediction_dashboard: PredictionMarketDashboard | None = None
+        self._cached_whale_alerts: WhaleAlertsDashboard | None = None
 
     # =========================================================================
     # System Commands (Command Palette)
@@ -386,6 +390,10 @@ class LibraApp(App):
             with TabPane("Predictions", id="predictions"):
                 yield PredictionMarketDashboard(id="prediction-market-dashboard")
 
+            # Whale Alerts tab (Issue #38)
+            with TabPane("Whales", id="whales"):
+                yield WhaleAlertsDashboard(id="whale-alerts-dashboard")
+
             with TabPane("Settings", id="settings"):
                 with VerticalScroll():
                     yield Static("Settings", classes="panel-title")
@@ -457,6 +465,12 @@ class LibraApp(App):
             )
         except Exception:
             pass
+        try:
+            self._cached_whale_alerts = self.query_one(
+                "#whale-alerts-dashboard", WhaleAlertsDashboard
+            )
+        except Exception:
+            pass
 
     def _get_log_viewer(self) -> LogViewer | None:
         """Get cached LogViewer reference."""
@@ -519,6 +533,10 @@ class LibraApp(App):
 
         # Initialize execution engine with demo client (Issue #36)
         self._setup_execution_engine()
+
+        # Initialize whale alerts and prediction markets with demo data after DOM is ready
+        self.call_later(self._update_whale_alerts)
+        self.call_later(self._update_prediction_markets)
 
         self._throttled_notify(
             "Demo Mode Active - Trade with simulated funds",
@@ -1236,6 +1254,11 @@ class LibraApp(App):
             if self._tick_count % 3 == 0:
                 self._update_prediction_markets()
 
+        # Whales tab: update whale alerts (Issue #38)
+        elif active_tab == "whales":
+            if self._tick_count % 4 == 0:
+                self._update_whale_alerts()
+
         # Other tabs: minimal updates (portfolio, backtest, etc. have their own timers or static data)
 
         # Auto trade every 5 ticks (always runs for simulation)
@@ -1377,6 +1400,22 @@ class LibraApp(App):
 
         # Update dashboard
         dashboard.update_from_data(demo_data)
+
+    def _update_whale_alerts(self) -> None:
+        """Update whale alerts dashboard with simulated signals (Issue #38)."""
+        dashboard = self._cached_whale_alerts
+        if not dashboard:
+            try:
+                dashboard = self.query_one("#whale-alerts-dashboard", WhaleAlertsDashboard)
+                self._cached_whale_alerts = dashboard
+            except Exception:
+                return
+
+        # Generate fresh demo data
+        demo_data = create_demo_whale_alerts()
+
+        # Update dashboard
+        dashboard.update_data(demo_data)
 
     # =========================================================================
     # Live Mode Event Handling

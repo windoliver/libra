@@ -163,6 +163,18 @@ from libra.tui.widgets.prediction_market_dashboard import (
     create_demo_prediction_markets,
 )
 
+# Whale Alerts Dashboard (Issue #38)
+from libra.tui.widgets.whale_alerts import (
+    AlertDetailPanel,
+    AlertSummaryCard,
+    SourceStatusBar as WhaleSourceStatusBar,
+    WhaleAlertData,
+    WhaleAlertsDashboard,
+    WhaleAlertsDashboardData,
+    WhaleAlertsTable,
+    create_demo_whale_alerts,
+)
+
 
 __all__ = [
     # Algorithm Monitor (Issue #36)
@@ -290,4 +302,13 @@ __all__ = [
     "PredictionMarketDashboardData",
     "ProviderStatusBar",
     "create_demo_prediction_markets",
+    # Whale Alerts Dashboard (Issue #38)
+    "AlertDetailPanel",
+    "AlertSummaryCard",
+    "WhaleSourceStatusBar",
+    "WhaleAlertData",
+    "WhaleAlertsDashboard",
+    "WhaleAlertsDashboardData",
+    "WhaleAlertsTable",
+    "create_demo_whale_alerts",
 ]
