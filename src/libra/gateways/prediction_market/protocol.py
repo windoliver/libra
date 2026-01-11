@@ -74,7 +74,9 @@ class PredictionOrderType(str, Enum):
     MARKET = "market"
     LIMIT = "limit"
     FOK = "fok"  # Fill or Kill
+    IOC = "ioc"  # Immediate or Cancel
     GTD = "gtd"  # Good Till Date
+    GTC = "gtc"  # Good Till Cancelled
 
 
 class PredictionOrderStatus(str, Enum):
