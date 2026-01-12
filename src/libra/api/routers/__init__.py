@@ -8,8 +8,10 @@ Each router handles a specific domain:
 - orders: Order management
 - market: Market data
 - system: Health and metrics
+- audit: Audit logging and compliance (Issue #16)
 """
 
+from libra.api.routers.audit import router as audit_router
 from libra.api.routers.auth import router as auth_router
 from libra.api.routers.market import router as market_router
 from libra.api.routers.orders import router as orders_router
@@ -18,6 +20,7 @@ from libra.api.routers.strategies import router as strategies_router
 from libra.api.routers.system import router as system_router
 
 __all__ = [
+    "audit_router",
     "auth_router",
     "strategies_router",
     "positions_router",

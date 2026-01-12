@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 
 from libra.api.deps import check_rate_limit, get_optional_user
 from libra.api.routers import (
+    audit_router,
     auth_router,
     market_router,
     orders_router,
@@ -233,6 +234,13 @@ Use one of these methods:
         system_router,
         prefix="/api/v1/system",
         tags=["System"],
+    )
+
+    app.include_router(
+        audit_router,
+        prefix="/api/v1/audit",
+        tags=["Audit"],
+        dependencies=[Depends(check_rate_limit)],
     )
 
     # Root endpoint
