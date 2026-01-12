@@ -86,6 +86,59 @@ from libra.risk.rate_limiter import (
     TokenBucketRateLimiter,
 )
 
+# Advanced Risk Management (Issue #15)
+from libra.risk.var import (
+    ConfidenceLevel,
+    PositionVaR,
+    VaRCalculator,
+    VaRConfig,
+    VaRMethod,
+    VaRResult,
+    create_var_calculator,
+)
+from libra.risk.stress_testing import (
+    AssetClass,
+    MarketShock,
+    PositionImpact,
+    ReverseStressResult,
+    ScenarioType,
+    SensitivityResult,
+    StressScenario,
+    StressTestEngine,
+    StressTestResult,
+    create_stress_test_engine,
+    HISTORICAL_SCENARIOS,
+    HYPOTHETICAL_SCENARIOS,
+)
+from libra.risk.correlation import (
+    ConcentrationMetrics,
+    CorrelationAlert,
+    CorrelationMatrix,
+    CorrelationMethod,
+    CorrelationMonitor,
+    CorrelationMonitorState,
+    CorrelationRegime,
+    DiversificationMetrics,
+    create_correlation_monitor,
+)
+from libra.risk.margin import (
+    MarginAlert,
+    MarginAlertLevel,
+    MarginConfig,
+    MarginMode,
+    MarginMonitor,
+    MarginPosition,
+    PortfolioMargin,
+    PositionSide,
+    create_margin_monitor,
+)
+from libra.risk.advanced_manager import (
+    AdvancedRiskConfig,
+    AdvancedRiskManager,
+    AdvancedRiskReport,
+    create_advanced_risk_manager,
+)
+
 
 __all__ = [
     # Engine (new)
@@ -113,4 +166,50 @@ __all__ = [
     "KellyCriterionSizer",
     "FixedQuantitySizer",
     "create_sizer",
+    # VaR Calculator (Issue #15)
+    "ConfidenceLevel",
+    "PositionVaR",
+    "VaRCalculator",
+    "VaRConfig",
+    "VaRMethod",
+    "VaRResult",
+    "create_var_calculator",
+    # Stress Testing (Issue #15)
+    "AssetClass",
+    "MarketShock",
+    "PositionImpact",
+    "ReverseStressResult",
+    "ScenarioType",
+    "SensitivityResult",
+    "StressScenario",
+    "StressTestEngine",
+    "StressTestResult",
+    "create_stress_test_engine",
+    "HISTORICAL_SCENARIOS",
+    "HYPOTHETICAL_SCENARIOS",
+    # Correlation Monitor (Issue #15)
+    "ConcentrationMetrics",
+    "CorrelationAlert",
+    "CorrelationMatrix",
+    "CorrelationMethod",
+    "CorrelationMonitor",
+    "CorrelationMonitorState",
+    "CorrelationRegime",
+    "DiversificationMetrics",
+    "create_correlation_monitor",
+    # Margin Monitor (Issue #15)
+    "MarginAlert",
+    "MarginAlertLevel",
+    "MarginConfig",
+    "MarginMode",
+    "MarginMonitor",
+    "MarginPosition",
+    "PortfolioMargin",
+    "PositionSide",
+    "create_margin_monitor",
+    # Advanced Risk Manager (Issue #15)
+    "AdvancedRiskConfig",
+    "AdvancedRiskManager",
+    "AdvancedRiskReport",
+    "create_advanced_risk_manager",
 ]

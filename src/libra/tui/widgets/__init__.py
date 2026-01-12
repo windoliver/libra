@@ -189,6 +189,23 @@ from libra.tui.widgets.funding_rate_dashboard import (
     create_demo_funding_dashboard_data,
 )
 
+# Risk Analytics Dashboard (Issue #15)
+from libra.tui.widgets.risk_analytics_dashboard import (
+    ConcentrationPanel,
+    CorrelationDisplayData,
+    CorrelationPanel,
+    MarginDisplayData,
+    MarginPositionsTable,
+    MarginUtilizationPanel,
+    RiskAnalyticsDashboard,
+    RiskAnalyticsDashboardData,
+    StressTestDisplayData,
+    StressTestPanel,
+    VaRDisplayData,
+    VaRPanel,
+    create_demo_risk_analytics_data,
+)
+
 
 __all__ = [
     # Algorithm Monitor (Issue #36)
@@ -336,4 +353,18 @@ __all__ = [
     "FundingRateSummary",
     "OpportunityCard",
     "create_demo_funding_dashboard_data",
+    # Risk Analytics Dashboard (Issue #15)
+    "ConcentrationPanel",
+    "CorrelationDisplayData",
+    "CorrelationPanel",
+    "MarginDisplayData",
+    "MarginPositionsTable",
+    "MarginUtilizationPanel",
+    "RiskAnalyticsDashboard",
+    "RiskAnalyticsDashboardData",
+    "StressTestDisplayData",
+    "StressTestPanel",
+    "VaRDisplayData",
+    "VaRPanel",
+    "create_demo_risk_analytics_data",
 ]

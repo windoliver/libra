@@ -90,6 +90,9 @@ from libra.tui.widgets import (
     # Funding Rate Dashboard (Issue #13)
     FundingRateDashboard,
     create_demo_funding_dashboard_data,
+    # Risk Analytics Dashboard (Issue #15)
+    RiskAnalyticsDashboard,
+    create_demo_risk_analytics_data,
 )
 from libra.tui.widgets.openbb_data import OpenBBDataDashboard
 
@@ -355,6 +358,13 @@ class LibraApp(App):
                         symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
                         id="risk-dashboard",
                     )
+
+            # Advanced Risk Analytics tab (Issue #15)
+            with TabPane("VaR", id="var"):
+                yield RiskAnalyticsDashboard(
+                    data=create_demo_risk_analytics_data(),
+                    id="risk-analytics-dashboard",
+                )
 
             with TabPane("Strategies", id="strategies"):
                 with Horizontal(id="strategy-panels"):

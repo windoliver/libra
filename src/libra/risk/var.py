@@ -1,0 +1,703 @@
+"""
+Value at Risk (VaR) Calculator.
+
+Implements multiple VaR calculation methodologies:
+- Historical VaR: Non-parametric, uses actual return distribution
+- Parametric VaR: Assumes normal distribution, uses volatility
+- Monte Carlo VaR: Simulation-based with correlation structure
+- Expected Shortfall (CVaR): Average loss beyond VaR threshold
+
+References:
+- Basel III regulatory framework
+- RiskMetrics Technical Document
+- Jorion, "Value at Risk" (3rd Edition)
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from decimal import Decimal
+from enum import Enum
+from typing import TYPE_CHECKING
+
+import numpy as np
+from scipy import stats
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+logger = logging.getLogger(__name__)
+
+
+class VaRMethod(Enum):
+    """VaR calculation methodology."""
+
+    HISTORICAL = "historical"
+    PARAMETRIC = "parametric"
+    MONTE_CARLO = "monte_carlo"
+
+
+class ConfidenceLevel(Enum):
+    """Standard confidence levels for VaR."""
+
+    CL_90 = 0.90
+    CL_95 = 0.95
+    CL_99 = 0.99
+    CL_995 = 0.995
+
+
+@dataclass
+class VaRResult:
+    """Result of VaR calculation."""
+
+    var: Decimal  # Value at Risk (positive = potential loss)
+    cvar: Decimal  # Conditional VaR / Expected Shortfall
+    confidence_level: float
+    time_horizon_days: int
+    method: VaRMethod
+    portfolio_value: Decimal
+    var_pct: float  # VaR as percentage of portfolio
+    cvar_pct: float  # CVaR as percentage of portfolio
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    num_observations: int = 0
+    num_simulations: int = 0  # For Monte Carlo
+
+    def __post_init__(self) -> None:
+        """Calculate percentages if not set."""
+        if self.portfolio_value > 0:
+            self.var_pct = float(self.var / self.portfolio_value) * 100
+            self.cvar_pct = float(self.cvar / self.portfolio_value) * 100
+
+
+@dataclass
+class PositionVaR:
+    """VaR breakdown by position."""
+
+    symbol: str
+    position_value: Decimal
+    var: Decimal
+    cvar: Decimal
+    var_pct: float
+    contribution_pct: float  # Contribution to portfolio VaR
+
+
+@dataclass
+class VaRConfig:
+    """Configuration for VaR calculations."""
+
+    # Default confidence level
+    confidence_level: float = 0.95
+
+    # Time horizon in days (1-day or 10-day per Basel)
+    time_horizon_days: int = 1
+
+    # Historical VaR settings
+    lookback_days: int = 252  # 1 year of trading days
+    min_observations: int = 30  # Minimum for calculation
+
+    # Monte Carlo settings
+    num_simulations: int = 10000
+    seed: int | None = None
+
+    # Parametric settings
+    use_ewma: bool = True  # Exponentially weighted volatility
+    ewma_lambda: float = 0.94  # RiskMetrics decay factor
+
+    # Scaling
+    sqrt_time_scaling: bool = True  # Scale VaR by sqrt(time)
+
+
+class VaRCalculator:
+    """
+    Value at Risk Calculator.
+
+    Calculates portfolio VaR using multiple methodologies with
+    proper time scaling and confidence level adjustments.
+
+    Example:
+        calculator = VaRCalculator(config=VaRConfig(confidence_level=0.99))
+
+        # Calculate VaR from historical returns
+        result = calculator.calculate_historical_var(
+            returns=daily_returns,
+            portfolio_value=Decimal("100000"),
+        )
+
+        print(f"99% 1-day VaR: ${result.var:,.2f}")
+        print(f"Expected Shortfall: ${result.cvar:,.2f}")
+    """
+
+    def __init__(self, config: VaRConfig | None = None) -> None:
+        """Initialize VaR calculator."""
+        self.config = config or VaRConfig()
+        self._rng = np.random.default_rng(self.config.seed)
+
+    def calculate_historical_var(
+        self,
+        returns: Sequence[float] | np.ndarray,
+        portfolio_value: Decimal,
+        confidence_level: float | None = None,
+        time_horizon_days: int | None = None,
+    ) -> VaRResult:
+        """
+        Calculate Historical VaR.
+
+        Uses the empirical distribution of returns without
+        assuming any parametric form.
+
+        Args:
+            returns: Historical returns (daily)
+            portfolio_value: Current portfolio value
+            confidence_level: Override config confidence level
+            time_horizon_days: Override config time horizon
+
+        Returns:
+            VaRResult with VaR and CVaR
+        """
+        returns_arr = np.asarray(returns)
+        conf = confidence_level or self.config.confidence_level
+        horizon = time_horizon_days or self.config.time_horizon_days
+
+        if len(returns_arr) < self.config.min_observations:
+            raise ValueError(
+                f"Need at least {self.config.min_observations} observations, "
+                f"got {len(returns_arr)}"
+            )
+
+        # Calculate VaR percentile (left tail for losses)
+        var_pct = np.percentile(returns_arr, (1 - conf) * 100)
+
+        # Calculate CVaR (Expected Shortfall) - average of returns below VaR
+        cvar_returns = returns_arr[returns_arr <= var_pct]
+        cvar_pct = float(np.mean(cvar_returns)) if len(cvar_returns) > 0 else var_pct
+
+        # Scale for time horizon (sqrt-time rule)
+        if self.config.sqrt_time_scaling and horizon > 1:
+            scaling = np.sqrt(horizon)
+            var_pct *= scaling
+            cvar_pct *= scaling
+
+        # Convert to dollar amounts (negative return = positive VaR)
+        var_amount = Decimal(str(abs(var_pct))) * portfolio_value
+        cvar_amount = Decimal(str(abs(cvar_pct))) * portfolio_value
+
+        return VaRResult(
+            var=var_amount,
+            cvar=cvar_amount,
+            confidence_level=conf,
+            time_horizon_days=horizon,
+            method=VaRMethod.HISTORICAL,
+            portfolio_value=portfolio_value,
+            var_pct=float(abs(var_pct)) * 100,
+            cvar_pct=float(abs(cvar_pct)) * 100,
+            num_observations=len(returns_arr),
+        )
+
+    def calculate_parametric_var(
+        self,
+        returns: Sequence[float] | np.ndarray,
+        portfolio_value: Decimal,
+        confidence_level: float | None = None,
+        time_horizon_days: int | None = None,
+    ) -> VaRResult:
+        """
+        Calculate Parametric (Variance-Covariance) VaR.
+
+        Assumes returns are normally distributed and uses
+        volatility to estimate VaR.
+
+        Args:
+            returns: Historical returns for volatility estimation
+            portfolio_value: Current portfolio value
+            confidence_level: Override config confidence level
+            time_horizon_days: Override config time horizon
+
+        Returns:
+            VaRResult with VaR and CVaR
+        """
+        returns_arr = np.asarray(returns)
+        conf = confidence_level or self.config.confidence_level
+        horizon = time_horizon_days or self.config.time_horizon_days
+
+        if len(returns_arr) < self.config.min_observations:
+            raise ValueError(
+                f"Need at least {self.config.min_observations} observations, "
+                f"got {len(returns_arr)}"
+            )
+
+        # Calculate volatility (optionally EWMA)
+        if self.config.use_ewma:
+            volatility = self._calculate_ewma_volatility(returns_arr)
+        else:
+            volatility = float(np.std(returns_arr, ddof=1))
+
+        mean_return = float(np.mean(returns_arr))
+
+        # Calculate z-score for confidence level
+        z_score = stats.norm.ppf(1 - conf)
+
+        # VaR = -mean + z * volatility (for losses)
+        var_pct = -(mean_return + z_score * volatility)
+
+        # CVaR for normal distribution
+        # E[X | X < VaR] = mean - volatility * phi(z) / (1-conf)
+        pdf_at_z = stats.norm.pdf(z_score)
+        cvar_pct = -(mean_return - volatility * pdf_at_z / (1 - conf))
+
+        # Scale for time horizon
+        if self.config.sqrt_time_scaling and horizon > 1:
+            scaling = np.sqrt(horizon)
+            var_pct *= scaling
+            cvar_pct *= scaling
+
+        # Convert to dollar amounts
+        var_amount = Decimal(str(abs(var_pct))) * portfolio_value
+        cvar_amount = Decimal(str(abs(cvar_pct))) * portfolio_value
+
+        return VaRResult(
+            var=var_amount,
+            cvar=cvar_amount,
+            confidence_level=conf,
+            time_horizon_days=horizon,
+            method=VaRMethod.PARAMETRIC,
+            portfolio_value=portfolio_value,
+            var_pct=abs(var_pct) * 100,
+            cvar_pct=abs(cvar_pct) * 100,
+            num_observations=len(returns_arr),
+        )
+
+    def calculate_monte_carlo_var(
+        self,
+        returns: Sequence[float] | np.ndarray,
+        portfolio_value: Decimal,
+        confidence_level: float | None = None,
+        time_horizon_days: int | None = None,
+        num_simulations: int | None = None,
+    ) -> VaRResult:
+        """
+        Calculate Monte Carlo VaR.
+
+        Simulates future returns based on historical distribution
+        parameters and calculates VaR from simulated scenarios.
+
+        Args:
+            returns: Historical returns for parameter estimation
+            portfolio_value: Current portfolio value
+            confidence_level: Override config confidence level
+            time_horizon_days: Override config time horizon
+            num_simulations: Override config number of simulations
+
+        Returns:
+            VaRResult with VaR and CVaR
+        """
+        returns_arr = np.asarray(returns)
+        conf = confidence_level or self.config.confidence_level
+        horizon = time_horizon_days or self.config.time_horizon_days
+        n_sims = num_simulations or self.config.num_simulations
+
+        if len(returns_arr) < self.config.min_observations:
+            raise ValueError(
+                f"Need at least {self.config.min_observations} observations, "
+                f"got {len(returns_arr)}"
+            )
+
+        # Estimate parameters
+        mean_return = float(np.mean(returns_arr))
+        volatility = float(np.std(returns_arr, ddof=1))
+
+        # Simulate returns for time horizon
+        simulated_returns = self._rng.normal(
+            mean_return * horizon,
+            volatility * np.sqrt(horizon),
+            n_sims,
+        )
+
+        # Calculate VaR from simulated distribution
+        var_pct = np.percentile(simulated_returns, (1 - conf) * 100)
+
+        # Calculate CVaR
+        cvar_returns = simulated_returns[simulated_returns <= var_pct]
+        cvar_pct = float(np.mean(cvar_returns)) if len(cvar_returns) > 0 else var_pct
+
+        # Convert to dollar amounts
+        var_amount = Decimal(str(abs(var_pct))) * portfolio_value
+        cvar_amount = Decimal(str(abs(cvar_pct))) * portfolio_value
+
+        return VaRResult(
+            var=var_amount,
+            cvar=cvar_amount,
+            confidence_level=conf,
+            time_horizon_days=horizon,
+            method=VaRMethod.MONTE_CARLO,
+            portfolio_value=portfolio_value,
+            var_pct=float(abs(var_pct)) * 100,
+            cvar_pct=float(abs(cvar_pct)) * 100,
+            num_observations=len(returns_arr),
+            num_simulations=n_sims,
+        )
+
+    def calculate_portfolio_var(
+        self,
+        position_returns: dict[str, np.ndarray],
+        position_values: dict[str, Decimal],
+        method: VaRMethod = VaRMethod.HISTORICAL,
+        confidence_level: float | None = None,
+        time_horizon_days: int | None = None,
+    ) -> tuple[VaRResult, list[PositionVaR]]:
+        """
+        Calculate portfolio VaR with position-level breakdown.
+
+        Accounts for correlations between positions when calculating
+        portfolio VaR, and provides marginal VaR contribution.
+
+        Args:
+            position_returns: Dict of symbol -> returns array
+            position_values: Dict of symbol -> position value
+            method: VaR calculation method
+            confidence_level: Override config confidence level
+            time_horizon_days: Override config time horizon
+
+        Returns:
+            Tuple of (portfolio VaR, list of position VaRs)
+        """
+        conf = confidence_level or self.config.confidence_level
+        horizon = time_horizon_days or self.config.time_horizon_days
+
+        symbols = list(position_returns.keys())
+        if not symbols:
+            raise ValueError("No positions provided")
+
+        # Validate all return series have same length
+        lengths = [len(position_returns[s]) for s in symbols]
+        if len(set(lengths)) > 1:
+            min_len = min(lengths)
+            logger.warning(
+                "Return series have different lengths, truncating to %d", min_len
+            )
+            position_returns = {
+                s: position_returns[s][-min_len:] for s in symbols
+            }
+
+        # Calculate portfolio value
+        portfolio_value = sum(position_values.values(), Decimal("0"))
+
+        # Calculate weights
+        weights = np.array(
+            [float(position_values[s] / portfolio_value) for s in symbols]
+        )
+
+        # Build return matrix
+        returns_matrix = np.column_stack([position_returns[s] for s in symbols])
+
+        # Calculate portfolio returns
+        portfolio_returns = returns_matrix @ weights
+
+        # Calculate portfolio VaR
+        if method == VaRMethod.HISTORICAL:
+            portfolio_var = self.calculate_historical_var(
+                portfolio_returns, portfolio_value, conf, horizon
+            )
+        elif method == VaRMethod.PARAMETRIC:
+            portfolio_var = self.calculate_parametric_var(
+                portfolio_returns, portfolio_value, conf, horizon
+            )
+        else:
+            portfolio_var = self.calculate_monte_carlo_var(
+                portfolio_returns, portfolio_value, conf, horizon
+            )
+
+        # Calculate individual position VaRs
+        position_vars: list[PositionVaR] = []
+        total_individual_var = Decimal("0")
+
+        for symbol in symbols:
+            pos_value = position_values[symbol]
+            pos_returns = position_returns[symbol]
+
+            if method == VaRMethod.HISTORICAL:
+                pos_var_result = self.calculate_historical_var(
+                    pos_returns, pos_value, conf, horizon
+                )
+            elif method == VaRMethod.PARAMETRIC:
+                pos_var_result = self.calculate_parametric_var(
+                    pos_returns, pos_value, conf, horizon
+                )
+            else:
+                pos_var_result = self.calculate_monte_carlo_var(
+                    pos_returns, pos_value, conf, horizon
+                )
+
+            total_individual_var += pos_var_result.var
+            position_vars.append(
+                PositionVaR(
+                    symbol=symbol,
+                    position_value=pos_value,
+                    var=pos_var_result.var,
+                    cvar=pos_var_result.cvar,
+                    var_pct=pos_var_result.var_pct,
+                    contribution_pct=0.0,  # Calculate after
+                )
+            )
+
+        # Calculate contribution percentages (marginal VaR contribution)
+        # This is simplified - true marginal VaR requires covariance matrix
+        for pos_var in position_vars:
+            if portfolio_var.var > 0:
+                # Weight contribution by individual VaR
+                pos_var.contribution_pct = float(pos_var.var / total_individual_var) * 100
+
+        return portfolio_var, position_vars
+
+    def calculate_component_var(
+        self,
+        position_returns: dict[str, np.ndarray],
+        position_values: dict[str, Decimal],
+        confidence_level: float | None = None,
+    ) -> dict[str, Decimal]:
+        """
+        Calculate Component VaR (marginal contribution to portfolio VaR).
+
+        Component VaR measures how much each position contributes
+        to total portfolio VaR, accounting for correlations.
+
+        Args:
+            position_returns: Dict of symbol -> returns array
+            position_values: Dict of symbol -> position value
+            confidence_level: Override config confidence level
+
+        Returns:
+            Dict of symbol -> component VaR
+        """
+        conf = confidence_level or self.config.confidence_level
+
+        symbols = list(position_returns.keys())
+        if not symbols:
+            return {}
+
+        # Build return matrix and calculate covariance
+        returns_matrix = np.column_stack([position_returns[s] for s in symbols])
+        cov_matrix = np.cov(returns_matrix, rowvar=False)
+
+        # Portfolio value and weights
+        portfolio_value = sum(position_values.values(), Decimal("0"))
+        weights = np.array(
+            [float(position_values[s] / portfolio_value) for s in symbols]
+        )
+
+        # Portfolio variance
+        port_variance = weights @ cov_matrix @ weights
+        port_volatility = np.sqrt(port_variance)
+
+        # Z-score for confidence level
+        z_score = abs(stats.norm.ppf(1 - conf))
+
+        # Marginal VaR = dVaR/dw = z * Cov(r_i, r_p) / sigma_p
+        marginal_var = z_score * (cov_matrix @ weights) / port_volatility
+
+        # Component VaR = w_i * Marginal_VaR_i * Portfolio_Value
+        component_vars = {}
+        for i, symbol in enumerate(symbols):
+            comp_var = weights[i] * marginal_var[i] * float(portfolio_value)
+            component_vars[symbol] = Decimal(str(abs(comp_var)))
+
+        return component_vars
+
+    def calculate_incremental_var(
+        self,
+        current_returns: dict[str, np.ndarray],
+        current_values: dict[str, Decimal],
+        new_position_returns: np.ndarray,
+        new_position_value: Decimal,
+        confidence_level: float | None = None,
+    ) -> Decimal:
+        """
+        Calculate Incremental VaR for adding a new position.
+
+        Measures the change in portfolio VaR from adding
+        a new position.
+
+        Args:
+            current_returns: Current portfolio position returns
+            current_values: Current position values
+            new_position_returns: Returns for new position
+            new_position_value: Value of new position
+            confidence_level: Override config confidence level
+
+        Returns:
+            Incremental VaR (positive = increases risk)
+        """
+        conf = confidence_level or self.config.confidence_level
+
+        # Calculate current portfolio VaR
+        if current_returns:
+            current_var, _ = self.calculate_portfolio_var(
+                current_returns, current_values, VaRMethod.PARAMETRIC, conf
+            )
+        else:
+            current_var = VaRResult(
+                var=Decimal("0"),
+                cvar=Decimal("0"),
+                confidence_level=conf,
+                time_horizon_days=self.config.time_horizon_days,
+                method=VaRMethod.PARAMETRIC,
+                portfolio_value=Decimal("0"),
+                var_pct=0.0,
+                cvar_pct=0.0,
+            )
+
+        # Add new position and recalculate
+        new_returns = dict(current_returns)
+        new_returns["_new_position"] = new_position_returns
+        new_values = dict(current_values)
+        new_values["_new_position"] = new_position_value
+
+        new_var, _ = self.calculate_portfolio_var(
+            new_returns, new_values, VaRMethod.PARAMETRIC, conf
+        )
+
+        return new_var.var - current_var.var
+
+    def _calculate_ewma_volatility(self, returns: np.ndarray) -> float:
+        """
+        Calculate EWMA (Exponentially Weighted Moving Average) volatility.
+
+        Uses RiskMetrics methodology with decay factor lambda.
+
+        Args:
+            returns: Historical returns
+
+        Returns:
+            EWMA volatility estimate
+        """
+        lam = self.config.ewma_lambda
+        n = len(returns)
+
+        # Initialize with sample variance
+        variance = float(np.var(returns, ddof=1))
+
+        # Apply EWMA
+        for i in range(1, n):
+            variance = lam * variance + (1 - lam) * returns[i] ** 2
+
+        return np.sqrt(variance)
+
+    def backtest_var(
+        self,
+        returns: np.ndarray,
+        portfolio_values: np.ndarray,
+        method: VaRMethod = VaRMethod.HISTORICAL,
+        confidence_level: float | None = None,
+        window_size: int | None = None,
+    ) -> dict:
+        """
+        Backtest VaR model using historical data.
+
+        Calculates VaR exceptions (breaches) and performs
+        statistical tests for model adequacy.
+
+        Args:
+            returns: Full historical returns
+            portfolio_values: Portfolio values over time
+            method: VaR calculation method to test
+            confidence_level: Override config confidence level
+            window_size: Rolling window size for VaR calculation
+
+        Returns:
+            Backtest results including exception rate and tests
+        """
+        conf = confidence_level or self.config.confidence_level
+        window = window_size or self.config.lookback_days
+
+        if len(returns) < window + 1:
+            raise ValueError(f"Need at least {window + 1} observations")
+
+        exceptions = 0
+        var_estimates = []
+        actual_losses = []
+
+        for i in range(window, len(returns)):
+            # Calculate VaR using rolling window
+            window_returns = returns[i - window : i]
+            port_value = Decimal(str(portfolio_values[i - 1]))
+
+            if method == VaRMethod.HISTORICAL:
+                var_result = self.calculate_historical_var(
+                    window_returns, port_value, conf, time_horizon_days=1
+                )
+            elif method == VaRMethod.PARAMETRIC:
+                var_result = self.calculate_parametric_var(
+                    window_returns, port_value, conf, time_horizon_days=1
+                )
+            else:
+                var_result = self.calculate_monte_carlo_var(
+                    window_returns, port_value, conf, time_horizon_days=1
+                )
+
+            var_estimates.append(float(var_result.var))
+
+            # Check if actual loss exceeded VaR
+            actual_loss = -returns[i] * float(port_value)
+            actual_losses.append(actual_loss)
+
+            if actual_loss > float(var_result.var):
+                exceptions += 1
+
+        n_observations = len(returns) - window
+        exception_rate = exceptions / n_observations
+        expected_rate = 1 - conf
+
+        # Kupiec POF test (Proportion of Failures)
+        # Tests if exception rate is consistent with confidence level
+        if exceptions > 0 and exceptions < n_observations:
+            lr_pof = -2 * (
+                exceptions * np.log(expected_rate / exception_rate)
+                + (n_observations - exceptions)
+                * np.log((1 - expected_rate) / (1 - exception_rate))
+            )
+            pof_pvalue = 1 - stats.chi2.cdf(lr_pof, 1)
+        else:
+            lr_pof = 0.0
+            pof_pvalue = 1.0
+
+        return {
+            "method": method.value,
+            "confidence_level": conf,
+            "n_observations": n_observations,
+            "exceptions": exceptions,
+            "exception_rate": exception_rate,
+            "expected_rate": expected_rate,
+            "kupiec_lr_statistic": lr_pof,
+            "kupiec_pvalue": pof_pvalue,
+            "model_adequate": pof_pvalue > 0.05,  # 5% significance
+            "var_estimates": np.array(var_estimates),
+            "actual_losses": np.array(actual_losses),
+        }
+
+
+def create_var_calculator(
+    confidence_level: float = 0.95,
+    time_horizon_days: int = 1,
+    lookback_days: int = 252,
+    use_ewma: bool = True,
+) -> VaRCalculator:
+    """
+    Factory function to create a VaR calculator.
+
+    Args:
+        confidence_level: VaR confidence level (e.g., 0.95, 0.99)
+        time_horizon_days: Time horizon for VaR (1 or 10 days)
+        lookback_days: Historical lookback window
+        use_ewma: Use EWMA for volatility estimation
+
+    Returns:
+        Configured VaRCalculator instance
+    """
+    config = VaRConfig(
+        confidence_level=confidence_level,
+        time_horizon_days=time_horizon_days,
+        lookback_days=lookback_days,
+        use_ewma=use_ewma,
+    )
+    return VaRCalculator(config)
