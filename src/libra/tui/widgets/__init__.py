@@ -189,6 +189,12 @@ from libra.tui.widgets.funding_rate_dashboard import (
     create_demo_funding_dashboard_data,
 )
 
+# Audit Dashboard (Issue #16)
+from libra.tui.widgets.audit_dashboard import (
+    AuditDashboard,
+    create_demo_audit_dashboard,
+)
+
 # Risk Analytics Dashboard (Issue #15)
 from libra.tui.widgets.risk_analytics_dashboard import (
     ConcentrationPanel,
@@ -353,6 +359,9 @@ __all__ = [
     "FundingRateSummary",
     "OpportunityCard",
     "create_demo_funding_dashboard_data",
+    # Audit Dashboard (Issue #16)
+    "AuditDashboard",
+    "create_demo_audit_dashboard",
     # Risk Analytics Dashboard (Issue #15)
     "ConcentrationPanel",
     "CorrelationDisplayData",

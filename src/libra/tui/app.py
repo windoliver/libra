@@ -93,6 +93,8 @@ from libra.tui.widgets import (
     # Risk Analytics Dashboard (Issue #15)
     RiskAnalyticsDashboard,
     create_demo_risk_analytics_data,
+    # Audit Dashboard (Issue #16)
+    AuditDashboard,
 )
 from libra.tui.widgets.openbb_data import OpenBBDataDashboard
 
@@ -365,6 +367,10 @@ class LibraApp(App):
                     data=create_demo_risk_analytics_data(),
                     id="risk-analytics-dashboard",
                 )
+
+            # Audit Log tab (Issue #16)
+            with TabPane("Audit", id="audit"):
+                yield AuditDashboard(id="audit-dashboard")
 
             with TabPane("Strategies", id="strategies"):
                 with Horizontal(id="strategy-panels"):
