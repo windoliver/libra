@@ -87,6 +87,9 @@ from libra.tui.widgets import (
     # Whale Alerts Dashboard (Issue #38)
     WhaleAlertsDashboard,
     create_demo_whale_alerts,
+    # Funding Rate Dashboard (Issue #13)
+    FundingRateDashboard,
+    create_demo_funding_dashboard_data,
 )
 from libra.tui.widgets.openbb_data import OpenBBDataDashboard
 
@@ -302,6 +305,7 @@ class LibraApp(App):
         self._cached_metrics_dashboard: MetricsDashboard | None = None
         self._cached_prediction_dashboard: PredictionMarketDashboard | None = None
         self._cached_whale_alerts: WhaleAlertsDashboard | None = None
+        self._cached_funding_dashboard: FundingRateDashboard | None = None
 
     # =========================================================================
     # System Commands (Command Palette)
@@ -393,6 +397,10 @@ class LibraApp(App):
             # Whale Alerts tab (Issue #38)
             with TabPane("Whales", id="whales"):
                 yield WhaleAlertsDashboard(id="whale-alerts-dashboard")
+
+            # Funding Rate Arbitrage tab (Issue #13)
+            with TabPane("Funding", id="funding"):
+                yield FundingRateDashboard(id="funding-rate-dashboard")
 
             with TabPane("Settings", id="settings"):
                 with VerticalScroll():
@@ -534,9 +542,10 @@ class LibraApp(App):
         # Initialize execution engine with demo client (Issue #36)
         self._setup_execution_engine()
 
-        # Initialize whale alerts and prediction markets with demo data after DOM is ready
+        # Initialize whale alerts, prediction markets, and funding rates with demo data after DOM is ready
         self.call_later(self._update_whale_alerts)
         self.call_later(self._update_prediction_markets)
+        self.call_later(self._update_funding_rates)
 
         self._throttled_notify(
             "Demo Mode Active - Trade with simulated funds",
@@ -1413,6 +1422,22 @@ class LibraApp(App):
 
         # Generate fresh demo data
         demo_data = create_demo_whale_alerts()
+
+        # Update dashboard
+        dashboard.update_data(demo_data)
+
+    def _update_funding_rates(self) -> None:
+        """Update funding rate dashboard with demo data (Issue #13)."""
+        dashboard = self._cached_funding_dashboard
+        if not dashboard:
+            try:
+                dashboard = self.query_one("#funding-rate-dashboard", FundingRateDashboard)
+                self._cached_funding_dashboard = dashboard
+            except Exception:
+                return
+
+        # Generate fresh demo data
+        demo_data = create_demo_funding_dashboard_data()
 
         # Update dashboard
         dashboard.update_data(demo_data)

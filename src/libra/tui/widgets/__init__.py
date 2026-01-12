@@ -175,6 +175,20 @@ from libra.tui.widgets.whale_alerts import (
     create_demo_whale_alerts,
 )
 
+# Funding Rate Dashboard (Issue #13)
+from libra.tui.widgets.funding_rate_dashboard import (
+    ArbitragePositionDisplayData,
+    ArbitragePositionsTable,
+    ExchangeStatusBar as FundingExchangeStatusBar,
+    FundingRateDashboard,
+    FundingRateDashboardData,
+    FundingRateDisplayData,
+    FundingRatesTable,
+    FundingRateSummary,
+    OpportunityCard,
+    create_demo_funding_dashboard_data,
+)
+
 
 __all__ = [
     # Algorithm Monitor (Issue #36)
@@ -311,4 +325,15 @@ __all__ = [
     "WhaleAlertsDashboardData",
     "WhaleAlertsTable",
     "create_demo_whale_alerts",
+    # Funding Rate Dashboard (Issue #13)
+    "ArbitragePositionDisplayData",
+    "ArbitragePositionsTable",
+    "FundingExchangeStatusBar",
+    "FundingRateDashboard",
+    "FundingRateDashboardData",
+    "FundingRateDisplayData",
+    "FundingRatesTable",
+    "FundingRateSummary",
+    "OpportunityCard",
+    "create_demo_funding_dashboard_data",
 ]
