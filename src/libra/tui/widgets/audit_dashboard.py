@@ -8,14 +8,11 @@ Part of Issue #16: Audit Logging System.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
-from typing import Any
 
-from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.widgets import DataTable, Label, RichLog, Static
+from textual.containers import Container, Horizontal
+from textual.widgets import DataTable, Static
 
 
 # Severity to color mapping
@@ -51,9 +48,19 @@ class AuditStatsPanel(Static):
 
     DEFAULT_CSS = """
     AuditStatsPanel {
-        height: 3;
-        background: $surface-darken-1;
+        height: 5;
         padding: 0 1;
+        border: round $primary-darken-2;
+        background: $surface;
+    }
+
+    AuditStatsPanel .header {
+        text-style: bold;
+        color: $text;
+    }
+
+    AuditStatsPanel .stats-row {
+        height: 2;
     }
     """
 
@@ -68,7 +75,8 @@ class AuditStatsPanel(Static):
         }
 
     def compose(self) -> ComposeResult:
-        yield Static(id="stats-content")
+        yield Static("AUDIT STATISTICS", classes="header")
+        yield Static(id="stats-content", classes="stats-row")
 
     def on_mount(self) -> None:
         self._update_display()
@@ -88,24 +96,19 @@ class AuditStatsPanel(Static):
         self._stats["errors"] = errors
         self._update_display()
 
-    def increment(self, key: str, amount: int = 1) -> None:
-        if key in self._stats:
-            self._stats[key] += amount
-            self._update_display()
-
     def _update_display(self) -> None:
         try:
             content = self.query_one("#stats-content", Static)
             text = Text()
-            text.append("Events: ", style="bold")
+            text.append("Events: ", style="dim")
             text.append(f"{self._stats['events']}  ", style="cyan")
-            text.append("Orders: ", style="bold")
+            text.append("Orders: ", style="dim")
             text.append(f"{self._stats['orders']}  ", style="cyan")
-            text.append("Risk: ", style="bold")
+            text.append("Risk: ", style="dim")
             text.append(f"{self._stats['risk']}  ", style="cyan")
-            text.append("Warnings: ", style="bold")
+            text.append("Warnings: ", style="dim")
             text.append(f"{self._stats['warnings']}  ", style="yellow")
-            text.append("Errors: ", style="bold")
+            text.append("Errors: ", style="dim")
             text.append(f"{self._stats['errors']}", style="red")
             content.update(text)
         except Exception:
@@ -117,30 +120,37 @@ class AuditEventLogPanel(Static):
 
     DEFAULT_CSS = """
     AuditEventLogPanel {
+        height: 100%;
+        border: round $primary-darken-2;
+        background: $surface;
+    }
+
+    AuditEventLogPanel DataTable {
         height: 1fr;
-        border: solid $primary;
-        padding: 1;
+    }
+
+    AuditEventLogPanel .header {
+        background: $primary-darken-3;
+        text-style: bold;
+        padding: 0 1;
+        height: 1;
     }
     """
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._log: RichLog | None = None
+        self._events: list[tuple[str, str, str, datetime]] = []
 
     def compose(self) -> ComposeResult:
-        yield Label("[bold]Live Audit Log[/bold]")
-        yield RichLog(
-            highlight=True,
-            markup=True,
-            max_lines=500,
-            wrap=False,
-            auto_scroll=True,
-            id="audit-log",
-        )
+        yield Static("LIVE AUDIT LOG", classes="header")
+        table = DataTable(id="events-table")
+        table.cursor_type = "row"
+        yield table
 
     def on_mount(self) -> None:
-        self._log = self.query_one("#audit-log", RichLog)
-        self._log.can_focus = False
+        table = self.query_one("#events-table", DataTable)
+        table.add_columns("Time", "Type", "Message")
+        self._update_display()
 
     def log_event(
         self,
@@ -149,20 +159,34 @@ class AuditEventLogPanel(Static):
         severity: str = "info",
         timestamp: datetime | None = None,
     ) -> None:
-        if not self._log:
-            return
-
         ts = timestamp or datetime.now(timezone.utc)
-        ts_str = ts.strftime("%H:%M:%S")
+        self._events.append((event_type, message, severity, ts))
+        self._update_display()
 
-        sev_color = SEVERITY_COLORS.get(severity, "white")
-        evt_color = EVENT_TYPE_COLORS.get(event_type, sev_color)
-        evt_short = event_type.split(".")[-1].upper()
+    def _update_display(self) -> None:
+        try:
+            table = self.query_one("#events-table", DataTable)
+            table.clear()
 
-        self._log.write(
-            f"[dim]{ts_str}[/dim] [{evt_color}]{evt_short:12}[/{evt_color}] "
-            f"[{sev_color}]{message}[/{sev_color}]"
-        )
+            for event_type, message, severity, ts in self._events[-15:]:
+                ts_str = ts.strftime("%H:%M:%S")
+                evt_short = event_type.split(".")[-1].upper()
+
+                # Color based on severity
+                if severity == "error" or severity == "critical":
+                    msg_display = f"[red]{message}[/red]"
+                    type_display = f"[red]{evt_short}[/red]"
+                elif severity == "warning":
+                    msg_display = f"[yellow]{message}[/yellow]"
+                    type_display = f"[yellow]{evt_short}[/yellow]"
+                else:
+                    evt_color = EVENT_TYPE_COLORS.get(event_type, "white")
+                    msg_display = message
+                    type_display = f"[{evt_color}]{evt_short}[/{evt_color}]"
+
+                table.add_row(ts_str, type_display, msg_display)
+        except Exception:
+            pass
 
 
 class AuditOrdersPanel(Static):
@@ -170,9 +194,20 @@ class AuditOrdersPanel(Static):
 
     DEFAULT_CSS = """
     AuditOrdersPanel {
+        height: 100%;
+        border: round $primary-darken-2;
+        background: $surface;
+    }
+
+    AuditOrdersPanel DataTable {
         height: 1fr;
-        border: solid $primary;
-        padding: 1;
+    }
+
+    AuditOrdersPanel .header {
+        background: $primary-darken-3;
+        text-style: bold;
+        padding: 0 1;
+        height: 1;
     }
     """
 
@@ -181,10 +216,14 @@ class AuditOrdersPanel(Static):
         self._orders: list[dict] = []
 
     def compose(self) -> ComposeResult:
-        yield Label("[bold]Order Audit Trails[/bold]")
-        yield Static(id="orders-content")
+        yield Static("ORDER AUDIT TRAILS", classes="header")
+        table = DataTable(id="orders-table")
+        table.cursor_type = "row"
+        yield table
 
     def on_mount(self) -> None:
+        table = self.query_one("#orders-table", DataTable)
+        table.add_columns("Time", "ID", "Symbol", "Side", "Qty", "Status", "Risk")
         self._update_display()
 
     def add_order(
@@ -212,43 +251,32 @@ class AuditOrdersPanel(Static):
 
     def _update_display(self) -> None:
         try:
-            content = self.query_one("#orders-content", Static)
+            table = self.query_one("#orders-table", DataTable)
+            table.clear()
 
-            if not self._orders:
-                content.update("No order audit data")
-                return
-
-            table = Table(box=None, expand=True)
-            table.add_column("Time", style="dim")
-            table.add_column("Order ID", style="cyan")
-            table.add_column("Symbol")
-            table.add_column("Side")
-            table.add_column("Qty", justify="right")
-            table.add_column("Status")
-            table.add_column("Risk")
-            table.add_column("Strategy")
-
-            for order in self._orders[-10:]:  # Last 10 orders
+            for order in self._orders[-8:]:
                 side_style = "green" if order["side"].lower() == "buy" else "red"
-                status_style = {
-                    "filled": "green",
-                    "rejected": "red",
-                    "cancelled": "yellow",
-                }.get(order["status"].lower(), "white")
-                risk_text = Text("PASS", style="green") if order["risk_passed"] else Text("FAIL", style="red")
+                status_lower = order["status"].lower()
+                if status_lower == "filled":
+                    status_style = "green"
+                elif status_lower == "rejected":
+                    status_style = "red"
+                elif status_lower == "cancelled":
+                    status_style = "yellow"
+                else:
+                    status_style = "white"
+
+                risk_text = "[green]PASS[/green]" if order["risk_passed"] else "[red]FAIL[/red]"
 
                 table.add_row(
                     order["time"],
                     order["order_id"],
                     order["symbol"],
-                    Text(order["side"].upper(), style=side_style),
+                    f"[{side_style}]{order['side'].upper()}[/{side_style}]",
                     order["quantity"],
-                    Text(order["status"].upper(), style=status_style),
+                    f"[{status_style}]{order['status'].upper()}[/{status_style}]",
                     risk_text,
-                    order["strategy"] or "-",
                 )
-
-            content.update(table)
         except Exception:
             pass
 
@@ -258,9 +286,20 @@ class AuditRiskPanel(Static):
 
     DEFAULT_CSS = """
     AuditRiskPanel {
+        height: 100%;
+        border: round $primary-darken-2;
+        background: $surface;
+    }
+
+    AuditRiskPanel DataTable {
         height: 1fr;
-        border: solid $primary;
-        padding: 1;
+    }
+
+    AuditRiskPanel .header {
+        background: $primary-darken-3;
+        text-style: bold;
+        padding: 0 1;
+        height: 1;
     }
     """
 
@@ -269,10 +308,14 @@ class AuditRiskPanel(Static):
         self._risk_events: list[dict] = []
 
     def compose(self) -> ComposeResult:
-        yield Label("[bold]Risk Audit Events[/bold]")
-        yield Static(id="risk-content")
+        yield Static("RISK AUDIT EVENTS", classes="header")
+        table = DataTable(id="risk-table")
+        table.cursor_type = "row"
+        yield table
 
     def on_mount(self) -> None:
+        table = self.query_one("#risk-table", DataTable)
+        table.add_columns("Time", "Check", "Result", "Current", "Limit", "Util %")
         self._update_display()
 
     def add_risk_event(
@@ -298,23 +341,11 @@ class AuditRiskPanel(Static):
 
     def _update_display(self) -> None:
         try:
-            content = self.query_one("#risk-content", Static)
+            table = self.query_one("#risk-table", DataTable)
+            table.clear()
 
-            if not self._risk_events:
-                content.update("No risk audit data")
-                return
-
-            table = Table(box=None, expand=True)
-            table.add_column("Time", style="dim")
-            table.add_column("Check")
-            table.add_column("Result")
-            table.add_column("Current", justify="right")
-            table.add_column("Limit", justify="right")
-            table.add_column("Util %", justify="right")
-            table.add_column("Order")
-
-            for event in self._risk_events[-10:]:  # Last 10 events
-                result_text = Text("PASS", style="green") if event["passed"] else Text("FAIL", style="red")
+            for event in self._risk_events[-8:]:
+                result_text = "[green]PASS[/green]" if event["passed"] else "[red]FAIL[/red]"
 
                 util = event["utilization"]
                 if util >= 100:
@@ -330,11 +361,8 @@ class AuditRiskPanel(Static):
                     result_text,
                     event["current"],
                     event["limit"],
-                    Text(f"{util:.1f}%", style=util_style),
-                    event["order_id"] or "-",
+                    f"[{util_style}]{util:.1f}%[/{util_style}]",
                 )
-
-            content.update(table)
         except Exception:
             pass
 
@@ -343,29 +371,45 @@ class AuditDashboard(Container):
     """
     Audit logging dashboard widget.
 
-    Displays:
-    - Statistics summary
-    - Real-time audit event log
-    - Order audit trails
-    - Risk events
+    Displays audit statistics, live event log, order trails, and risk events.
     """
 
     DEFAULT_CSS = """
     AuditDashboard {
-        height: 100%;
+        height: 1fr;
+        min-height: 25;
+        padding: 1;
+    }
+
+    AuditDashboard #stats-row {
+        height: 5;
+        margin-bottom: 1;
+    }
+
+    AuditDashboard #log-row {
+        height: 1fr;
+        min-height: 10;
+        margin-bottom: 1;
+    }
+
+    AuditDashboard #log-row AuditEventLogPanel {
         width: 100%;
     }
 
-    AuditDashboard > Vertical {
-        height: 100%;
-    }
-
-    AuditDashboard Horizontal {
+    AuditDashboard #details-row {
         height: 1fr;
+        min-height: 10;
     }
 
-    AuditDashboard Horizontal > * {
+    AuditDashboard #orders-container {
         width: 1fr;
+        height: 100%;
+        margin-right: 1;
+    }
+
+    AuditDashboard #risk-container {
+        width: 1fr;
+        height: 100%;
     }
     """
 
@@ -377,17 +421,25 @@ class AuditDashboard(Container):
         self._risk_panel: AuditRiskPanel | None = None
 
     def compose(self) -> ComposeResult:
-        with Vertical():
+        # Stats row at top
+        with Horizontal(id="stats-row"):
             yield AuditStatsPanel(id="audit-stats")
-            yield AuditEventLogPanel(id="audit-event-log")
-            with Horizontal():
+
+        # Event log row
+        with Horizontal(id="log-row"):
+            yield AuditEventLogPanel(id="audit-log")
+
+        # Orders and Risk side by side
+        with Horizontal(id="details-row"):
+            with Container(id="orders-container"):
                 yield AuditOrdersPanel(id="audit-orders")
+            with Container(id="risk-container"):
                 yield AuditRiskPanel(id="audit-risk")
 
     def on_mount(self) -> None:
         """Cache panel references and load demo data."""
         self._stats_panel = self.query_one("#audit-stats", AuditStatsPanel)
-        self._log_panel = self.query_one("#audit-event-log", AuditEventLogPanel)
+        self._log_panel = self.query_one("#audit-log", AuditEventLogPanel)
         self._orders_panel = self.query_one("#audit-orders", AuditOrdersPanel)
         self._risk_panel = self.query_one("#audit-risk", AuditRiskPanel)
 
@@ -401,17 +453,17 @@ class AuditDashboard(Container):
         # Demo events
         demo_events = [
             ("system.start", "LIBRA Audit System initialized", "info", now - timedelta(minutes=30)),
-            ("order.created", "Order ORD-001 created: BUY 0.5 BTC/USDT", "info", now - timedelta(minutes=25)),
-            ("risk.check_passed", "Position limit check passed for ORD-001", "info", now - timedelta(minutes=25)),
-            ("order.submitted", "Order ORD-001 submitted to exchange", "info", now - timedelta(minutes=24)),
-            ("order.filled", "Order ORD-001 filled @ 42,500.00", "info", now - timedelta(minutes=24)),
-            ("order.created", "Order ORD-002 created: BUY 5.0 ETH/USDT", "info", now - timedelta(minutes=20)),
-            ("risk.check_passed", "Notional limit check passed for ORD-002", "info", now - timedelta(minutes=20)),
-            ("order.filled", "Order ORD-002 filled @ 2,205.50", "info", now - timedelta(minutes=19)),
-            ("order.created", "Order ORD-003 created: SELL 100 SOL/USDT", "warning", now - timedelta(minutes=10)),
-            ("risk.check_failed", "Notional limit exceeded for ORD-003 (119%)", "warning", now - timedelta(minutes=10)),
-            ("order.rejected", "Order ORD-003 rejected: risk limit exceeded", "error", now - timedelta(minutes=10)),
-            ("agent.decision", "Momentum agent: BUY signal BTC/USDT (conf: 0.85)", "info", now - timedelta(minutes=5)),
+            ("order.created", "Order ORD-001: BUY 0.5 BTC/USDT", "info", now - timedelta(minutes=25)),
+            ("risk.check_passed", "Position limit passed for ORD-001", "info", now - timedelta(minutes=25)),
+            ("order.submitted", "ORD-001 submitted to exchange", "info", now - timedelta(minutes=24)),
+            ("order.filled", "ORD-001 filled @ 42,500", "info", now - timedelta(minutes=24)),
+            ("order.created", "Order ORD-002: BUY 5.0 ETH/USDT", "info", now - timedelta(minutes=20)),
+            ("risk.check_passed", "Notional limit passed ORD-002", "info", now - timedelta(minutes=20)),
+            ("order.filled", "ORD-002 filled @ 2,205.50", "info", now - timedelta(minutes=19)),
+            ("order.created", "Order ORD-003: SELL 100 SOL", "warning", now - timedelta(minutes=10)),
+            ("risk.check_failed", "Notional limit exceeded (119%)", "warning", now - timedelta(minutes=10)),
+            ("order.rejected", "ORD-003 rejected: risk limit", "error", now - timedelta(minutes=10)),
+            ("agent.decision", "Momentum: BUY BTC (0.85)", "info", now - timedelta(minutes=5)),
         ]
 
         event_count = 0
@@ -429,9 +481,9 @@ class AuditDashboard(Container):
 
         # Demo orders
         demo_orders = [
-            ("ORD-001", "BTC/USDT", "buy", "0.5", "filled", True, "momentum_v1", now - timedelta(minutes=24)),
-            ("ORD-002", "ETH/USDT", "buy", "5.0", "filled", True, "mean_reversion", now - timedelta(minutes=19)),
-            ("ORD-003", "SOL/USDT", "sell", "100.0", "rejected", False, "momentum_v1", now - timedelta(minutes=10)),
+            ("ORD-001", "BTC/USDT", "buy", "0.5", "filled", True, "momentum", now - timedelta(minutes=24)),
+            ("ORD-002", "ETH/USDT", "buy", "5.0", "filled", True, "reversion", now - timedelta(minutes=19)),
+            ("ORD-003", "SOL/USDT", "sell", "100", "rejected", False, "momentum", now - timedelta(minutes=10)),
         ]
 
         for order_id, symbol, side, qty, status, risk, strategy, ts in demo_orders:
@@ -441,8 +493,8 @@ class AuditDashboard(Container):
         # Demo risk events
         demo_risk = [
             ("position_limit", True, "0.5", "2.0", 25.0, "ORD-001", now - timedelta(minutes=25)),
-            ("notional_limit", True, "11027.50", "50000.00", 22.05, "ORD-002", now - timedelta(minutes=20)),
-            ("notional_limit", False, "59500.00", "50000.00", 119.0, "ORD-003", now - timedelta(minutes=10)),
+            ("notional_limit", True, "11027", "50000", 22.05, "ORD-002", now - timedelta(minutes=20)),
+            ("notional_limit", False, "59500", "50000", 119.0, "ORD-003", now - timedelta(minutes=10)),
         ]
 
         for check, passed, current, limit, util, order_id, ts in demo_risk:
