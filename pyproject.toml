@@ -76,7 +76,7 @@ web3 = [
 
 # All optional plugins (convenience install)
 all-plugins = [
-    "libra[ccxt,freqtrade,tui,database,api,web3,openbb,prediction-markets]",
+    "libra[ccxt,freqtrade,tui,database,api,web3,openbb,prediction-markets,alpaca]",
 ]
 
 # TUI - Terminal User Interface (v4.0+ required for Markdown streaming)
@@ -125,6 +125,16 @@ prediction-markets = [
     "httpx>=0.27",           # Async HTTP client
 ]
 
+# Alpaca - US Stocks & Options (Issue #61)
+alpaca = [
+    "alpaca-py>=0.30.0",     # Official Alpaca SDK
+]
+
+# Stocks - All US stock trading plugins
+stocks = [
+    "libra[alpaca,openbb]",  # Alpaca execution + OpenBB data
+]
+
 [project.scripts]
 libra = "libra.cli:main"
 
@@ -137,6 +147,7 @@ hummingbot = "libra.plugins.hummingbot_adapter:HummingbotAdapter"
 [project.entry-points."libra.gateways"]
 paper = "libra.gateways.paper_gateway:PaperGateway"
 ccxt = "libra.gateways.ccxt_gateway:CCXTGateway"
+alpaca = "libra.gateways.alpaca:AlpacaGateway"
 
 [build-system]
 requires = ["hatchling"]
