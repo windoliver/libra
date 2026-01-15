@@ -19,11 +19,11 @@ Features:
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Grid, Horizontal, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
@@ -35,9 +35,15 @@ from textual.widgets import (
     Static,
 )
 
+# Settlement integration (Issue #65)
+from libra.core.settlement import (
+    SettlementTracker,
+    BuyingPowerCalculator,
+    AccountType,
+)
+
 
 if TYPE_CHECKING:
-    from libra.gateways.protocol import Order
     from libra.risk.manager import RiskManager
 
 
@@ -481,6 +487,13 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
         symbols: list[str] | None = None,
         risk_manager: RiskManager | None = None,
         current_prices: dict[str, Decimal] | None = None,
+        # Settlement integration (Issue #65)
+        settlement_tracker: SettlementTracker | None = None,
+        buying_power_calculator: BuyingPowerCalculator | None = None,
+        cash_balance: Decimal | None = None,
+        portfolio_value: Decimal | None = None,
+        positions: dict[str, Decimal] | None = None,
+        account_type: AccountType = AccountType.MARGIN,
         name: str | None = None,
         id: str | None = None,
         classes: str | None = None,
@@ -492,6 +505,12 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
             symbols: List of available trading symbols
             risk_manager: RiskManager for pre-trade validation
             current_prices: Dict of symbol -> current price
+            settlement_tracker: SettlementTracker for settlement-aware validation
+            buying_power_calculator: Calculator for buying power checks
+            cash_balance: Current cash balance for buying power
+            portfolio_value: Portfolio value for margin calculations
+            positions: Dict of symbol -> current position size
+            account_type: Account type (cash, margin, pdt)
         """
         super().__init__(name=name, id=id, classes=classes)
         self._symbols = symbols or ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
@@ -501,6 +520,16 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
             "ETH/USDT": Decimal("3045.00"),
             "SOL/USDT": Decimal("142.50"),
         }
+
+        # Settlement integration (Issue #65)
+        self._settlement_tracker = settlement_tracker or SettlementTracker()
+        self._buying_power_calc = buying_power_calculator or BuyingPowerCalculator(
+            self._settlement_tracker, account_type=account_type
+        )
+        self._cash_balance = cash_balance or Decimal("100000")  # Demo default
+        self._portfolio_value = portfolio_value or Decimal("50000")  # Demo default
+        self._positions = positions or {}  # symbol -> quantity
+        self._account_type = account_type
 
         # Form state
         self._selected_symbol: str = self._symbols[0] if self._symbols else ""
@@ -728,39 +757,77 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
         current_price = self._current_prices.get(self._selected_symbol, Decimal("0"))
         notional = self._quantity * current_price
 
-        # Check 1: Position limit (simulated - would use RiskManager in real impl)
-        position_pct = min(float(self._quantity) * 10, 100)  # Simulated
-        position_limit = 25.0  # Simulated limit
+        # =================================================================
+        # Settlement-aware buying power check (Issue #65)
+        # =================================================================
+        bp = self._buying_power_calc.calculate(
+            cash_balance=self._cash_balance,
+            portfolio_value=self._portfolio_value,
+        )
+
+        # Check 1: Buying power (for BUY orders)
+        if self._selected_side == "BUY":
+            has_buying_power = notional <= bp.buying_power
+            bp_pct = float(notional / bp.buying_power * 100) if bp.buying_power > 0 else 100
+            checks.append((
+                "buying_power",
+                has_buying_power,
+                f"Buying Power: ${notional:,.0f} / ${bp.buying_power:,.0f} ({bp_pct:.0f}%)",
+            ))
+
+        # Check 2: Sell validation (GFV risk for cash accounts)
+        if self._selected_side == "SELL":
+            current_position = self._positions.get(self._selected_symbol, Decimal("0"))
+            can_sell, sell_reason = self._buying_power_calc.can_sell(
+                symbol=self._selected_symbol,
+                quantity=self._quantity,
+                current_position=current_position,
+            )
+            checks.append((
+                "sell_check",
+                can_sell,
+                sell_reason if not can_sell else f"Can sell {self._quantity} shares",
+            ))
+
+        # Check 3: Account type indicator
+        account_label = {
+            AccountType.CASH: "Cash (settled funds only)",
+            AccountType.MARGIN: "Margin (2x leverage)",
+            AccountType.PDT: "PDT (4x day trade)",
+        }.get(self._account_type, "Unknown")
+        checks.append((
+            "account_type",
+            True,
+            f"Account: {account_label}",
+        ))
+
+        # Check 4: Settlement warnings from buying power
+        for warning in bp.warnings:
+            checks.append((
+                "bp_warning",
+                False,
+                warning,
+            ))
+
+        # =================================================================
+        # Standard risk checks
+        # =================================================================
+
+        # Check 5: Position limit (simulated)
+        position_pct = min(float(self._quantity) * 10, 100)
+        position_limit = 25.0
         checks.append((
             "position_limit",
             position_pct < position_limit,
             f"Position: {position_pct:.0f}% / {position_limit:.0f}% max",
         ))
 
-        # Check 2: Daily loss limit (simulated)
-        daily_used = 2000  # Simulated
-        daily_limit = 10000
-        checks.append((
-            "daily_loss",
-            daily_used < daily_limit,
-            f"Daily P&L: ${daily_used:,} / ${daily_limit:,} limit",
-        ))
-
-        # Check 3: Order rate (simulated)
-        order_rate = 2
-        rate_limit = 5
-        checks.append((
-            "rate_limit",
-            order_rate < rate_limit,
-            f"Order rate: {order_rate}/{rate_limit} per sec",
-        ))
-
-        # Check 4: Large order warning
+        # Check 6: Large order warning
         large_order_threshold = Decimal("5000")
         if notional > large_order_threshold:
             checks.append((
                 "large_order",
-                False,  # Warning, not blocking
+                False,
                 f"Large order: ${notional:,.2f} > ${large_order_threshold:,}",
             ))
 
@@ -776,7 +843,6 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
     def _perform_real_risk_check(self, checks: list[tuple[str, bool, str]]) -> None:
         """Perform real risk validation using RiskManager."""
         # This would be implemented when integrating with real RiskManager
-        # For now, we show simulated checks above
         pass
 
     # =========================================================================
@@ -801,6 +867,37 @@ class OrderEntryScreen(ModalScreen[OrderEntryResult]):
         if self._selected_type != "MARKET" and not self._price:
             self.notify("Please enter a price for limit orders", severity="error")
             return
+
+        # =================================================================
+        # Settlement-aware validation (Issue #65)
+        # =================================================================
+        current_price = self._current_prices.get(self._selected_symbol, Decimal("0"))
+        notional = self._quantity * current_price
+
+        if self._selected_side == "BUY":
+            # Check buying power
+            can_buy, reason = self._buying_power_calc.can_buy(
+                symbol=self._selected_symbol,
+                quantity=self._quantity,
+                price=current_price,
+                current_cash=self._cash_balance,
+                portfolio_value=self._portfolio_value,
+            )
+            if not can_buy:
+                self.notify(reason, severity="error", timeout=5)
+                return
+
+        elif self._selected_side == "SELL":
+            # Check for GFV risk (cash accounts)
+            current_position = self._positions.get(self._selected_symbol, Decimal("0"))
+            can_sell, reason = self._buying_power_calc.can_sell(
+                symbol=self._selected_symbol,
+                quantity=self._quantity,
+                current_position=current_position,
+            )
+            if not can_sell:
+                self.notify(reason, severity="error", timeout=5)
+                return
 
         # Get algorithm parameters if algorithm is selected
         algo_params: dict | None = None
