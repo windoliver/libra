@@ -195,6 +195,16 @@ from libra.tui.widgets.audit_dashboard import (
     create_demo_audit_dashboard,
 )
 
+# Market Status Widget (Issue #62)
+from libra.tui.widgets.market_status import (
+    CountdownTimer,
+    HolidayTable,
+    MarketStatusBadge,
+    MarketStatusWidget,
+    SessionSchedulePanel,
+    create_demo_market_status,
+)
+
 # Risk Analytics Dashboard (Issue #15)
 from libra.tui.widgets.risk_analytics_dashboard import (
     ConcentrationPanel,
@@ -362,6 +372,13 @@ __all__ = [
     # Audit Dashboard (Issue #16)
     "AuditDashboard",
     "create_demo_audit_dashboard",
+    # Market Status Widget (Issue #62)
+    "CountdownTimer",
+    "HolidayTable",
+    "MarketStatusBadge",
+    "MarketStatusWidget",
+    "SessionSchedulePanel",
+    "create_demo_market_status",
     # Risk Analytics Dashboard (Issue #15)
     "ConcentrationPanel",
     "CorrelationDisplayData",

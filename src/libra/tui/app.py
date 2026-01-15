@@ -95,6 +95,8 @@ from libra.tui.widgets import (
     create_demo_risk_analytics_data,
     # Audit Dashboard (Issue #16)
     AuditDashboard,
+    # Market Status Widget (Issue #62)
+    MarketStatusWidget,
 )
 from libra.tui.widgets.openbb_data import OpenBBDataDashboard
 
@@ -335,6 +337,9 @@ class LibraApp(App):
         # Tabbed content for different views
         with TabbedContent(initial="dashboard", id="main-tabs"):
             with TabPane("Dashboard", id="dashboard"):
+                # Market status at the top (Issue #62)
+                yield MarketStatusWidget(id="market-status")
+                yield Rule()
                 with Horizontal(id="main-panels"):
                     yield BalanceDisplay()
                     yield PositionDisplay()
