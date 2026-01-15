@@ -78,7 +78,7 @@ web3 = [
 
 # All optional plugins (convenience install)
 all-plugins = [
-    "libra[ccxt,freqtrade,tui,database,api,web3,openbb,prediction-markets,alpaca]",
+    "libra[ccxt,freqtrade,tui,database,api,web3,openbb,prediction-markets,alpaca,ibkr]",
 ]
 
 # TUI - Terminal User Interface (v4.0+ required for Markdown streaming)
@@ -132,9 +132,14 @@ alpaca = [
     "alpaca-py>=0.30.0",     # Official Alpaca SDK
 ]
 
+# Interactive Brokers - Institutional-grade trading (Issue #64)
+ibkr = [
+    "ib_async>=1.0.0",       # TWS API wrapper (successor to ib_insync)
+]
+
 # Stocks - All US stock trading plugins
 stocks = [
-    "libra[alpaca,openbb]",  # Alpaca execution + OpenBB data
+    "libra[alpaca,ibkr,openbb]",  # Alpaca + IBKR execution + OpenBB data
 ]
 
 [project.scripts]
