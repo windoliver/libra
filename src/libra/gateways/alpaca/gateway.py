@@ -16,9 +16,9 @@ from collections.abc import AsyncIterator
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+from libra.core.sessions import MarketSessionManager
 from libra.gateways.alpaca.config import AlpacaConfig
 from libra.gateways.alpaca.symbols import (
-    from_occ_symbol,
     is_option_symbol,
     normalize_symbol,
 )
@@ -27,6 +27,7 @@ from libra.gateways.protocol import (
     BaseGateway,
     GatewayCapabilities,
     GatewayError,
+    MarketClosedError,
     Order,
     OrderBook,
     OrderResult,
@@ -174,7 +175,9 @@ class AlpacaGateway(BaseGateway):
         Args:
             config: Alpaca gateway configuration
         """
-        super().__init__(name="alpaca", config=config.__dict__)
+        # Create session manager for market hours validation (Issue #62)
+        session_manager = MarketSessionManager()
+        super().__init__(name="alpaca", config=config.__dict__, session_manager=session_manager)
         self._config = config
         self._trading_client: Any = None
         self._data_client: Any = None
@@ -436,7 +439,17 @@ class AlpacaGateway(BaseGateway):
 
         Supports stocks and options (single-leg).
         For multi-leg options, use submit_multileg_order().
+
+        Validates market session before submission (Issue #62):
+        - Regular hours: All order types allowed
+        - Extended hours: Only allowed if order.extended_hours=True
+        - Market closed: Raises MarketClosedError
         """
+        # Validate market session (Issue #62)
+        valid, reason = self.validate_session(order)
+        if not valid:
+            raise MarketClosedError(reason or "Market is closed")
+
         await self._rate_limit()
 
         if not self._trading_client:
@@ -552,6 +565,7 @@ class AlpacaGateway(BaseGateway):
         order_type: OrderType = OrderType.LIMIT,
         limit_price: Decimal | None = None,
         time_in_force: TimeInForce = TimeInForce.DAY,
+        extended_hours: bool = False,
     ) -> OrderResult:
         """
         Submit a multi-leg options order.
@@ -564,6 +578,7 @@ class AlpacaGateway(BaseGateway):
             order_type: MARKET or LIMIT
             limit_price: Net debit/credit for limit orders
             time_in_force: Time-in-force (DAY only for options)
+            extended_hours: Allow extended hours trading (Issue #62)
 
         Returns:
             OrderResult for the multi-leg order
@@ -579,6 +594,19 @@ class AlpacaGateway(BaseGateway):
                 limit_price=Decimal("2.50"),
             )
         """
+        # Validate market session (Issue #62)
+        # Create a dummy order for validation
+        dummy_order = Order(
+            symbol=legs[0]["symbol"] if legs else "",
+            side=OrderSide.BUY,
+            order_type=order_type,
+            amount=Decimal("1"),
+            extended_hours=extended_hours,
+        )
+        valid, reason = self.validate_session(dummy_order)
+        if not valid:
+            raise MarketClosedError(reason or "Market is closed")
+
         await self._rate_limit()
 
         if not self._trading_client:

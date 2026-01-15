@@ -31,6 +31,8 @@ import msgspec
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from libra.core.sessions import MarketSessionManager
+
 
 # =============================================================================
 # Enums
@@ -318,6 +320,7 @@ class Order(msgspec.Struct, frozen=True, gc=False):
     post_only: bool = False  # Only maker orders (no taker)
     leverage: int | None = None  # Leverage for derivatives
     timestamp_ns: int | None = None  # Creation time (nanoseconds)
+    extended_hours: bool = False  # Allow pre-market/after-hours (Issue #62)
 
     # Execution algorithm fields (Issue #36)
     exec_algorithm: str | None = None  # Algorithm name: "twap", "vwap", "iceberg", "pov"
@@ -349,6 +352,7 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             post_only=self.post_only,
             leverage=self.leverage,
             timestamp_ns=self.timestamp_ns,
+            extended_hours=self.extended_hours,
             exec_algorithm=self.exec_algorithm,
             exec_algorithm_params=self.exec_algorithm_params,
             parent_order_id=self.parent_order_id,
@@ -375,6 +379,7 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             post_only=self.post_only,
             leverage=self.leverage,
             timestamp_ns=time.time_ns(),
+            extended_hours=self.extended_hours,
             exec_algorithm=self.exec_algorithm,
             exec_algorithm_params=self.exec_algorithm_params,
             parent_order_id=self.parent_order_id,
@@ -405,6 +410,7 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             post_only=self.post_only,
             leverage=self.leverage,
             timestamp_ns=self.timestamp_ns,
+            extended_hours=self.extended_hours,
             exec_algorithm=algorithm,
             exec_algorithm_params=params,
             parent_order_id=self.parent_order_id,
@@ -435,6 +441,7 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             post_only=self.post_only,
             leverage=self.leverage,
             timestamp_ns=self.timestamp_ns,
+            extended_hours=self.extended_hours,
             exec_algorithm=self.exec_algorithm,
             exec_algorithm_params=self.exec_algorithm_params,
             parent_order_id=self.parent_order_id,
@@ -466,6 +473,7 @@ class Order(msgspec.Struct, frozen=True, gc=False):
             post_only=self.post_only,
             leverage=self.leverage,
             timestamp_ns=self.timestamp_ns,
+            extended_hours=self.extended_hours,
             exec_algorithm=self.exec_algorithm,
             exec_algorithm_params=self.exec_algorithm_params,
             parent_order_id=self.parent_order_id,
@@ -1125,6 +1133,7 @@ class BaseGateway(ABC):
         self,
         name: str,
         config: dict[str, Any] | None = None,
+        session_manager: MarketSessionManager | None = None,
     ) -> None:
         """
         Initialize gateway.
@@ -1132,11 +1141,36 @@ class BaseGateway(ABC):
         Args:
             name: Gateway identifier
             config: Configuration dict (API keys, etc.)
+            session_manager: Market session manager for stock/options gateways
         """
         self._name = name
         self._config = config or {}
         self._connected = False
         self._subscribed_symbols: set[str] = set()
+        self._session_manager = session_manager
+
+    @property
+    def session_manager(self) -> MarketSessionManager | None:
+        """Market session manager for trading hours validation."""
+        return self._session_manager
+
+    def validate_session(self, order: Order) -> tuple[bool, str | None]:
+        """
+        Validate order against market session rules.
+
+        Args:
+            order: Order to validate
+
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        if self._session_manager is None:
+            # No session manager = no validation (e.g., crypto gateways)
+            return True, None
+
+        return self._session_manager.validate_order_timing(
+            extended_hours=order.extended_hours,
+        )
 
     @property
     def name(self) -> str:
@@ -1296,6 +1330,10 @@ class InsufficientFundsError(OrderError):
 
 class RateLimitError(GatewayError):
     """Rate limit exceeded."""
+
+
+class MarketClosedError(OrderError):
+    """Market is closed, order cannot be placed."""
 
 
 # =============================================================================

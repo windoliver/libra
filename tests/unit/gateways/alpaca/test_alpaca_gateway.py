@@ -457,6 +457,148 @@ class TestAlpacaGateway:
 # =============================================================================
 
 
+# =============================================================================
+# Session Validation Tests (Issue #62)
+# =============================================================================
+
+
+class TestAlpacaGatewaySessionValidation:
+    """Tests for market session validation in Alpaca Gateway."""
+
+    @pytest.fixture
+    def mock_config(self) -> AlpacaConfig:
+        """Create test config."""
+        return AlpacaConfig(
+            credentials=AlpacaCredentials(
+                api_key="PKTEST123",
+                secret_key="testsecret",
+            ),
+            paper=True,
+        )
+
+    @pytest.fixture
+    def mock_account(self) -> MagicMock:
+        """Create mock Alpaca account."""
+        account = MagicMock()
+        account.account_number = "TEST123"
+        account.equity = "100000.00"
+        account.buying_power = "50000.00"
+        account.trading_blocked = False
+        account.account_blocked = False
+        return account
+
+    @pytest.mark.asyncio
+    async def test_session_manager_initialized(self, mock_config: AlpacaConfig) -> None:
+        """Test that session manager is created during gateway init."""
+        from libra.gateways.alpaca.gateway import AlpacaGateway
+
+        gateway = AlpacaGateway(mock_config)
+
+        # Session manager should be initialized
+        assert gateway.session_manager is not None
+        assert gateway.session_manager.__class__.__name__ == "MarketSessionManager"
+
+    @pytest.mark.asyncio
+    async def test_submit_order_validates_session(self, mock_config: AlpacaConfig) -> None:
+        """Test that submit_order validates market session."""
+        from libra.gateways.alpaca.gateway import AlpacaGateway
+        from libra.gateways.protocol import MarketClosedError
+
+        gateway = AlpacaGateway(mock_config)
+        # Manually set up gateway as "connected" without calling connect()
+        gateway._connected = True
+        gateway._trading_client = MagicMock()
+
+        # Mock session manager to return market closed
+        gateway._session_manager.validate_order_timing = MagicMock(
+            return_value=(False, "Market is closed")
+        )
+
+        order = Order(
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            amount=Decimal("10"),
+        )
+
+        with pytest.raises(MarketClosedError, match="Market is closed"):
+            await gateway.submit_order(order)
+
+    @pytest.mark.asyncio
+    async def test_validate_session_called_before_submit(self, mock_config: AlpacaConfig) -> None:
+        """Test that validate_session is called with correct extended_hours flag."""
+        from libra.gateways.alpaca.gateway import AlpacaGateway
+        from libra.gateways.protocol import MarketClosedError
+
+        gateway = AlpacaGateway(mock_config)
+        gateway._connected = True
+        gateway._trading_client = MagicMock()
+
+        # Test with extended_hours=True - mock to fail after validation check
+        gateway._session_manager.validate_order_timing = MagicMock(
+            return_value=(False, "Extended hours disabled")
+        )
+
+        order_extended = Order(
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            amount=Decimal("10"),
+            extended_hours=True,
+        )
+
+        with pytest.raises(MarketClosedError):
+            await gateway.submit_order(order_extended)
+
+        # Verify validate_order_timing was called with extended_hours=True
+        gateway._session_manager.validate_order_timing.assert_called_once_with(
+            extended_hours=True
+        )
+
+        # Reset mock and test with extended_hours=False
+        gateway._session_manager.validate_order_timing.reset_mock()
+        gateway._session_manager.validate_order_timing.return_value = (False, "Market closed")
+
+        order_regular = Order(
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            amount=Decimal("10"),
+            extended_hours=False,
+        )
+
+        with pytest.raises(MarketClosedError):
+            await gateway.submit_order(order_regular)
+
+        # Verify validate_order_timing was called with extended_hours=False
+        gateway._session_manager.validate_order_timing.assert_called_once_with(
+            extended_hours=False
+        )
+
+    def test_validate_session_method_exists(self, mock_config: AlpacaConfig) -> None:
+        """Test that gateway inherits validate_session from BaseGateway."""
+        from libra.gateways.alpaca.gateway import AlpacaGateway
+
+        gateway = AlpacaGateway(mock_config)
+
+        # validate_session should be callable
+        assert hasattr(gateway, "validate_session")
+        assert callable(gateway.validate_session)
+
+        # Test with a mock order
+        order = Order(
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            amount=Decimal("10"),
+        )
+
+        # The method should return a tuple (bool, str | None)
+        result = gateway.validate_session(order)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+
 @pytest.mark.skip(reason="Requires real Alpaca API credentials")
 class TestAlpacaGatewayIntegration:
     """Integration tests with real Alpaca paper trading API."""
