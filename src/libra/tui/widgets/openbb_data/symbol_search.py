@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import Input, Label, Select, Static
@@ -281,12 +281,36 @@ class SymbolSearchInput(Static):
 
     def _emit_selection(self, symbol: str) -> None:
         """Emit symbol selected message."""
+        # Normalize crypto symbols: BTC -> BTC-USD, ETH -> ETH-USD
+        normalized_symbol = self._normalize_symbol(symbol)
+
         selection = SymbolSelection(
-            symbol=symbol,
+            symbol=normalized_symbol,
             provider=self.provider,
             data_type=self.data_type,
         )
         self.post_message(self.SymbolSelected(selection))
+
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Normalize symbol based on data type."""
+        symbol = symbol.upper().strip()
+
+        if self.data_type == "crypto":
+            # Common crypto symbols that need -USD suffix
+            crypto_bases = {
+                "BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "DOT", "MATIC",
+                "AVAX", "LINK", "UNI", "ATOM", "LTC", "BCH", "XLM", "ALGO",
+                "VET", "FIL", "TRX", "ETC", "XMR", "AAVE", "MKR", "COMP",
+            }
+            # If it's a bare crypto symbol, add -USD suffix
+            if symbol in crypto_bases:
+                return f"{symbol}-USD"
+            # If it's already in format like BTCUSD, convert to BTC-USD
+            for base in crypto_bases:
+                if symbol == f"{base}USD":
+                    return f"{base}-USD"
+
+        return symbol
 
     def get_selection(self) -> SymbolSelection:
         """Get current selection."""

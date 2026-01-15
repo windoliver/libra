@@ -321,6 +321,7 @@ class OpenBBDataDashboard(Container):
         try:
             if not self.gateway:
                 self._set_status("No gateway configured", error=True)
+                self._clear_chart_on_error(symbol)
                 return
 
             bars = await self.gateway.get_crypto_historical(
@@ -328,6 +329,11 @@ class OpenBBDataDashboard(Container):
                 interval="1d",
                 provider=provider,
             )
+
+            if not bars:
+                self._set_status(f"No data for {symbol}", error=True)
+                self._clear_chart_on_error(symbol)
+                return
 
             chart_data = PriceChartData(
                 symbol=symbol,
@@ -339,13 +345,17 @@ class OpenBBDataDashboard(Container):
             try:
                 chart = self.query_one("#price-chart", PriceChartWidget)
                 chart.set_data(chart_data)
+                chart._update_chart()
+                chart._update_stats()
+                chart._update_title()
             except Exception:
                 pass
 
-            self._set_status(f"Loaded {symbol}", error=False)
+            self._set_status(f"Loaded {symbol} ({len(bars)} bars)", error=False)
 
         except Exception as e:
             self._set_status(f"Error: {e}", error=True)
+            self._clear_chart_on_error(symbol)
         finally:
             self._set_loading(False)
 
@@ -587,6 +597,22 @@ class OpenBBDataDashboard(Container):
     # =========================================================================
     # UI Helpers
     # =========================================================================
+
+    def _clear_chart_on_error(self, symbol: str) -> None:
+        """Clear chart and show error state for a symbol."""
+        try:
+            chart = self.query_one("#price-chart", PriceChartWidget)
+            # Set empty data with the symbol so the title updates
+            empty_data = PriceChartData(
+                symbol=symbol,
+                interval="1d",
+                bars=[],
+                provider=self.current_provider,
+            )
+            chart.set_data(empty_data)
+            chart._update_title()
+        except Exception:
+            pass
 
     def _set_loading(self, loading: bool, message: str = "") -> None:
         """Set loading state."""
