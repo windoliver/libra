@@ -923,3 +923,111 @@ def register_openbb_fetchers() -> None:
 
 # Auto-register on import
 register_openbb_fetchers()
+
+
+# =============================================================================
+# Converters: OpenBB DTOs -> Core Models
+# =============================================================================
+
+
+def openbb_to_core_option_contract(
+    openbb_contract: OptionContract,
+) -> "CoreOptionContract":
+    """
+    Convert OpenBB OptionContract (DTO) to core OptionContract.
+
+    Args:
+        openbb_contract: OpenBB option contract from fetcher
+
+    Returns:
+        Core OptionContract with richer domain methods
+    """
+    from libra.core.options import OptionContract as CoreOptionContract
+    from libra.core.options import OptionType
+
+    option_type = (
+        OptionType.CALL
+        if openbb_contract.option_type.lower() == "call"
+        else OptionType.PUT
+    )
+
+    return CoreOptionContract(
+        symbol=openbb_contract.contract_symbol,
+        underlying=openbb_contract.underlying,
+        option_type=option_type,
+        strike=openbb_contract.strike,
+        expiration=openbb_contract.expiration,
+    )
+
+
+def openbb_to_greeks(openbb_contract: OptionContract) -> "Greeks":
+    """
+    Extract Greeks from OpenBB OptionContract.
+
+    Args:
+        openbb_contract: OpenBB option contract with Greeks data
+
+    Returns:
+        Core Greeks struct
+    """
+    from libra.core.options import Greeks
+
+    return Greeks(
+        delta=openbb_contract.delta or Decimal("0"),
+        gamma=openbb_contract.gamma or Decimal("0"),
+        theta=openbb_contract.theta or Decimal("0"),
+        vega=openbb_contract.vega or Decimal("0"),
+        rho=openbb_contract.rho or Decimal("0"),
+        iv=openbb_contract.implied_volatility or Decimal("0"),
+    )
+
+
+def openbb_to_greeks_snapshot(
+    openbb_contract: OptionContract,
+    underlying_price: Decimal | None = None,
+) -> "GreeksSnapshot":
+    """
+    Convert OpenBB OptionContract to core GreeksSnapshot.
+
+    Args:
+        openbb_contract: OpenBB option contract with Greeks and market data
+        underlying_price: Current price of underlying (optional)
+
+    Returns:
+        Core GreeksSnapshot with Greeks and market data
+    """
+    from libra.core.options import GreeksSnapshot
+
+    greeks = openbb_to_greeks(openbb_contract)
+
+    return GreeksSnapshot(
+        greeks=greeks,
+        underlying_price=underlying_price or Decimal("0"),
+        option_price=openbb_contract.last or Decimal("0"),
+        bid=openbb_contract.bid or Decimal("0"),
+        ask=openbb_contract.ask or Decimal("0"),
+        volume=openbb_contract.volume or 0,
+        open_interest=openbb_contract.open_interest or 0,
+    )
+
+
+def openbb_to_chain_entry(
+    openbb_contract: OptionContract,
+    underlying_price: Decimal | None = None,
+) -> "OptionChainEntry":
+    """
+    Convert OpenBB OptionContract to core OptionChainEntry.
+
+    Args:
+        openbb_contract: OpenBB option contract
+        underlying_price: Current price of underlying
+
+    Returns:
+        Core OptionChainEntry for use in OptionChain
+    """
+    from libra.core.options import OptionChainEntry
+
+    contract = openbb_to_core_option_contract(openbb_contract)
+    snapshot = openbb_to_greeks_snapshot(openbb_contract, underlying_price)
+
+    return OptionChainEntry(contract=contract, snapshot=snapshot)

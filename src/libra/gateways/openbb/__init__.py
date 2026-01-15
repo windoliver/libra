@@ -50,6 +50,10 @@ from libra.gateways.openbb.fetchers import (
     OpenBBFundamentalsFetcher,
     OpenBBOptionsFetcher,
     OpenBBQuoteFetcher,
+    openbb_to_chain_entry,
+    openbb_to_core_option_contract,
+    openbb_to_greeks,
+    openbb_to_greeks_snapshot,
     register_openbb_fetchers,
 )
 
@@ -74,4 +78,9 @@ __all__ = [
     "OpenBBEconomicFetcher",
     "OpenBBQuoteFetcher",
     "register_openbb_fetchers",
+    # Converters (OpenBB DTO -> Core Models)
+    "openbb_to_core_option_contract",
+    "openbb_to_greeks",
+    "openbb_to_greeks_snapshot",
+    "openbb_to_chain_entry",
 ]
