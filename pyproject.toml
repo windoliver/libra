@@ -29,6 +29,8 @@ dependencies = [
     "curl-cffi>=0.7,<0.8",                     # Pin to version with pre-built wheels
     # Exchange Connectivity (Issue #29)
     "ccxt>=4.0",                               # 100+ crypto exchanges
+    # Stock Brokers (Issue #64)
+    "ib_async>=1.0.0",                         # Interactive Brokers TWS API
     # Database (Issue #21)
     "questdb>=3.0",                            # QuestDB time-series
     "asyncpg>=0.29",                           # Async PostgreSQL
