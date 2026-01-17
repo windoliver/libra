@@ -16,14 +16,14 @@ import asyncio
 import gzip
 import json
 import logging
-import os
 import shutil
 import sqlite3
-import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterator
+
+import aiofiles
 
 from libra.audit.trail import (
     AuditEvent,
@@ -119,15 +119,15 @@ class AuditPersistence:
         # File handles
         self._current_file: Path | None = None
         self._file_handle: Any = None
-        self._file_lock = threading.Lock()
+        self._file_lock = asyncio.Lock()  # Issue #73: use asyncio.Lock for async context
 
         # Write buffer
         self._buffer: list[AuditEvent] = []
-        self._buffer_lock = threading.Lock()
+        self._buffer_lock = asyncio.Lock()  # Issue #73: use asyncio.Lock for async context
 
         # SQLite connection
         self._db_conn: sqlite3.Connection | None = None
-        self._db_lock = threading.Lock()
+        self._db_lock = asyncio.Lock()  # Issue #73: use asyncio.Lock for async context
 
         # State
         self._initialized = False
@@ -239,7 +239,7 @@ class AuditPersistence:
         self._db_conn.commit()
 
     def _open_log_file(self) -> None:
-        """Open or rotate log file."""
+        """Open or rotate log file (sync version for initialization)."""
         now = datetime.now(timezone.utc)
         date_str = now.strftime("%Y-%m-%d")
         hour_str = now.strftime("%H")
@@ -247,27 +247,26 @@ class AuditPersistence:
         file_name = f"audit_{date_str}_{hour_str}.jsonl"
         file_path = self.config.hot_path / file_name
 
-        with self._file_lock:
-            if self._file_handle:
-                self._file_handle.close()
+        if self._file_handle:
+            self._file_handle.close()
 
-            self._current_file = file_path
-            self._file_handle = open(file_path, "a", encoding="utf-8")
-            self._current_file_size = file_path.stat().st_size if file_path.exists() else 0
+        self._current_file = file_path
+        self._file_handle = open(file_path, "a", encoding="utf-8")
+        self._current_file_size = file_path.stat().st_size if file_path.exists() else 0
 
-    def _check_rotation(self) -> None:
-        """Check if log rotation is needed."""
+    async def _check_rotation_async(self) -> None:
+        """Check if log rotation is needed (async)."""
         max_size = self.config.retention.max_file_size_mb * 1024 * 1024
 
         if self._current_file_size >= max_size:
-            self._rotate_file()
+            await self._rotate_file_async()
 
-    def _rotate_file(self) -> None:
-        """Rotate current log file."""
+    async def _rotate_file_async(self) -> None:
+        """Rotate current log file (async, Issue #73)."""
         if not self._current_file:
             return
 
-        with self._file_lock:
+        async with self._file_lock:
             if self._file_handle:
                 self._file_handle.close()
 
@@ -279,12 +278,15 @@ class AuditPersistence:
             if self._current_file.exists():
                 self._current_file.rename(new_path)
 
-            # Open new file
+            # Open new file (sync is OK here, we hold the lock)
             self._open_log_file()
 
     def write_event(self, event: AuditEvent) -> None:
         """
-        Write a single audit event.
+        Write a single audit event synchronously.
+
+        For non-concurrent use cases (tests, simple scripts).
+        For async/concurrent access, use write_event_async().
 
         Args:
             event: Audit event to write
@@ -293,45 +295,95 @@ class AuditPersistence:
             self.initialize()
 
         # Write to file
-        with self._file_lock:
-            if self._file_handle:
-                line = json.dumps(event.to_dict(), default=str) + "\n"
-                self._file_handle.write(line)
-                self._file_handle.flush()
-                self._current_file_size += len(line.encode())
+        if self._current_file:
+            line = json.dumps(event.to_dict(), default=str) + "\n"
+            with open(self._current_file, "a", encoding="utf-8") as f:
+                f.write(line)
+            self._current_file_size += len(line.encode())
 
         # Index in database
         self._index_event(event)
 
-        # Check rotation
-        self._check_rotation()
+    def _index_event(self, event: AuditEvent) -> None:
+        """Index event in SQLite database (sync version)."""
+        if not self._db_conn:
+            return
 
-    def write_events(self, events: list[AuditEvent]) -> None:
+        cursor = self._db_conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO audit_events
+                (audit_id, event_type, severity, timestamp, sequence_number,
+                 source, actor, session_id, trace_id, message, details,
+                 checksum, file_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.audit_id,
+                    event.event_type.value,
+                    event.severity.value,
+                    event.timestamp.isoformat(),
+                    event.sequence_number,
+                    event.source,
+                    event.actor,
+                    event.session_id,
+                    event.trace_id,
+                    event.message,
+                    json.dumps(dict(event.details)),
+                    event.checksum,
+                    str(self._current_file) if self._current_file else "",
+                ),
+            )
+            self._db_conn.commit()
+        except Exception as e:
+            logger.error("Failed to index event: %s", e)
+
+    async def write_event_async(self, event: AuditEvent) -> None:
         """
-        Write multiple audit events.
+        Write a single audit event asynchronously (Issue #73).
+
+        Uses asyncio.Lock and aiofiles for non-blocking I/O.
+        Preferred for async/concurrent code paths.
+
+        Args:
+            event: Audit event to write
+        """
+        if not self._initialized:
+            self.initialize()
+
+        # Write to file with async lock
+        async with self._file_lock:
+            if self._current_file:
+                line = json.dumps(event.to_dict(), default=str) + "\n"
+                async with aiofiles.open(self._current_file, "a", encoding="utf-8") as f:
+                    await f.write(line)
+                self._current_file_size += len(line.encode())
+
+        # Index in database
+        await self._index_event_async(event)
+
+        # Check rotation
+        await self._check_rotation_async()
+
+    async def write_events_async(self, events: list[AuditEvent]) -> None:
+        """
+        Write events asynchronously (Issue #73).
+
+        Uses asyncio.Lock for non-blocking synchronization.
 
         Args:
             events: List of events to write
         """
         for event in events:
-            self.write_event(event)
+            await self.write_event_async(event)
 
-    async def write_events_async(self, events: list[AuditEvent]) -> None:
-        """
-        Write events asynchronously.
-
-        Args:
-            events: List of events to write
-        """
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self.write_events, events)
-
-    def _index_event(self, event: AuditEvent) -> None:
-        """Index event in SQLite database."""
+    async def _index_event_async(self, event: AuditEvent) -> None:
+        """Index event in SQLite database (async, Issue #73)."""
         if not self._db_conn:
             return
 
-        with self._db_lock:
+        async with self._db_lock:
             cursor = self._db_conn.cursor()
             try:
                 cursor.execute(
@@ -364,7 +416,10 @@ class AuditPersistence:
 
     def write_order(self, order: OrderAuditTrail) -> None:
         """
-        Write order audit trail.
+        Write order audit trail synchronously.
+
+        For non-concurrent use cases (tests, simple scripts).
+        For async/concurrent access, use write_order_async().
 
         Args:
             order: Order audit trail to write
@@ -372,7 +427,52 @@ class AuditPersistence:
         if not self._db_conn:
             return
 
-        with self._db_lock:
+        cursor = self._db_conn.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO audit_orders
+                (order_id, symbol, side, quantity, price, status,
+                 strategy_name, risk_check_passed, filled_quantity,
+                 filled_price, commission, slippage, created_at,
+                 filled_at, session_id, trace_id, data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    order.order_id,
+                    order.symbol,
+                    order.side,
+                    str(order.quantity),
+                    str(order.price) if order.price else None,
+                    order.status,
+                    order.strategy_name,
+                    1 if order.risk_check_passed else 0,
+                    str(order.filled_quantity),
+                    str(order.filled_price),
+                    str(order.commission),
+                    str(order.slippage),
+                    order.created_at.isoformat(),
+                    order.filled_at.isoformat() if order.filled_at else None,
+                    order.session_id,
+                    order.trace_id,
+                    json.dumps(order.to_dict()),
+                ),
+            )
+            self._db_conn.commit()
+        except Exception as e:
+            logger.error("Failed to write order: %s", e)
+
+    async def write_order_async(self, order: OrderAuditTrail) -> None:
+        """
+        Write order audit trail asynchronously (Issue #73).
+
+        Args:
+            order: Order audit trail to write
+        """
+        if not self._db_conn:
+            return
+
+        async with self._db_lock:
             cursor = self._db_conn.cursor()
             try:
                 cursor.execute(
@@ -422,7 +522,10 @@ class AuditPersistence:
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         """
-        Query audit events with filters.
+        Query audit events with filters synchronously.
+
+        For non-concurrent use cases (tests, simple scripts).
+        For async/concurrent access, use query_events_async().
 
         Args:
             start_time: Filter events after this time
@@ -488,7 +591,93 @@ class AuditPersistence:
         """
         params.extend([limit, offset])
 
-        with self._db_lock:
+        cursor = self._db_conn.cursor()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        return [dict(row) for row in rows]
+
+    async def query_events_async(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        event_types: list[AuditEventType] | None = None,
+        severity: AuditSeverity | None = None,
+        session_id: str | None = None,
+        trace_id: str | None = None,
+        source: str | None = None,
+        search_text: str | None = None,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """
+        Query audit events with filters asynchronously (Issue #73).
+
+        Args:
+            start_time: Filter events after this time
+            end_time: Filter events before this time
+            event_types: Filter by event types
+            severity: Filter by minimum severity
+            session_id: Filter by session
+            trace_id: Filter by trace
+            source: Filter by source
+            search_text: Search in message
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            List of event dictionaries
+        """
+        if not self._db_conn:
+            return []
+
+        conditions = []
+        params: list[Any] = []
+
+        if start_time:
+            conditions.append("timestamp >= ?")
+            params.append(start_time.isoformat())
+
+        if end_time:
+            conditions.append("timestamp <= ?")
+            params.append(end_time.isoformat())
+
+        if event_types:
+            placeholders = ",".join("?" * len(event_types))
+            conditions.append(f"event_type IN ({placeholders})")
+            params.extend(et.value for et in event_types)
+
+        if severity:
+            conditions.append("severity = ?")
+            params.append(severity.value)
+
+        if session_id:
+            conditions.append("session_id = ?")
+            params.append(session_id)
+
+        if trace_id:
+            conditions.append("trace_id = ?")
+            params.append(trace_id)
+
+        if source:
+            conditions.append("source = ?")
+            params.append(source)
+
+        if search_text:
+            conditions.append("message LIKE ?")
+            params.append(f"%{search_text}%")
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        query = f"""
+            SELECT * FROM audit_events
+            WHERE {where_clause}
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+        """
+        params.extend([limit, offset])
+
+        async with self._db_lock:
             cursor = self._db_conn.cursor()
             cursor.execute(query, params)
             rows = cursor.fetchall()
@@ -505,7 +694,10 @@ class AuditPersistence:
         limit: int = 1000,
     ) -> list[dict[str, Any]]:
         """
-        Query order audit trails.
+        Query order audit trails synchronously.
+
+        For non-concurrent use cases (tests, simple scripts).
+        For async/concurrent access, use query_orders_async().
 
         Args:
             start_time: Filter orders after this time
@@ -554,7 +746,72 @@ class AuditPersistence:
         """
         params.append(limit)
 
-        with self._db_lock:
+        cursor = self._db_conn.cursor()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        return [dict(row) for row in rows]
+
+    async def query_orders_async(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        symbol: str | None = None,
+        status: str | None = None,
+        session_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """
+        Query order audit trails asynchronously (Issue #73).
+
+        Args:
+            start_time: Filter orders after this time
+            end_time: Filter orders before this time
+            symbol: Filter by symbol
+            status: Filter by status
+            session_id: Filter by session
+            limit: Maximum results
+
+        Returns:
+            List of order dictionaries
+        """
+        if not self._db_conn:
+            return []
+
+        conditions = []
+        params: list[Any] = []
+
+        if start_time:
+            conditions.append("created_at >= ?")
+            params.append(start_time.isoformat())
+
+        if end_time:
+            conditions.append("created_at <= ?")
+            params.append(end_time.isoformat())
+
+        if symbol:
+            conditions.append("symbol = ?")
+            params.append(symbol)
+
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+
+        if session_id:
+            conditions.append("session_id = ?")
+            params.append(session_id)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        query = f"""
+            SELECT * FROM audit_orders
+            WHERE {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        async with self._db_lock:
             cursor = self._db_conn.cursor()
             cursor.execute(query, params)
             rows = cursor.fetchall()
@@ -566,7 +823,7 @@ class AuditPersistence:
         start_time: datetime | None = None,
         end_time: datetime | None = None,
     ) -> int:
-        """Get count of events in time range."""
+        """Get count of events in time range synchronously."""
         if not self._db_conn:
             return 0
 
@@ -583,7 +840,36 @@ class AuditPersistence:
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-        with self._db_lock:
+        cursor = self._db_conn.cursor()
+        cursor.execute(
+            f"SELECT COUNT(*) FROM audit_events WHERE {where_clause}",
+            params,
+        )
+        return cursor.fetchone()[0]
+
+    async def get_event_count_async(
+        self,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+    ) -> int:
+        """Get count of events in time range asynchronously (Issue #73)."""
+        if not self._db_conn:
+            return 0
+
+        conditions = []
+        params: list[Any] = []
+
+        if start_time:
+            conditions.append("timestamp >= ?")
+            params.append(start_time.isoformat())
+
+        if end_time:
+            conditions.append("timestamp <= ?")
+            params.append(end_time.isoformat())
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        async with self._db_lock:
             cursor = self._db_conn.cursor()
             cursor.execute(
                 f"SELECT COUNT(*) FROM audit_events WHERE {where_clause}",
@@ -648,9 +934,9 @@ class AuditPersistence:
                 file_path.unlink()
                 stats["deleted"] += 1
 
-        # Clean up database
+        # Clean up database (Issue #73: use async with for asyncio.Lock)
         cutoff = now - timedelta(days=policy.warm_retention_days)
-        with self._db_lock:
+        async with self._db_lock:
             if self._db_conn:
                 cursor = self._db_conn.cursor()
                 cursor.execute(
@@ -702,7 +988,7 @@ class AuditPersistence:
                     continue
 
     def get_statistics(self) -> dict[str, Any]:
-        """Get persistence statistics."""
+        """Get persistence statistics synchronously."""
         stats = {
             "initialized": self._initialized,
             "current_file": str(self._current_file) if self._current_file else None,
@@ -713,7 +999,27 @@ class AuditPersistence:
         }
 
         if self._db_conn:
-            with self._db_lock:
+            cursor = self._db_conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM audit_events")
+            stats["indexed_events"] = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM audit_orders")
+            stats["indexed_orders"] = cursor.fetchone()[0]
+
+        return stats
+
+    async def get_statistics_async(self) -> dict[str, Any]:
+        """Get persistence statistics asynchronously (Issue #73)."""
+        stats = {
+            "initialized": self._initialized,
+            "current_file": str(self._current_file) if self._current_file else None,
+            "current_file_size_mb": self._current_file_size / (1024 * 1024),
+            "hot_files": len(list(self.config.hot_path.glob("*.jsonl"))),
+            "warm_files": len(list(self.config.warm_path.glob("*.gz"))),
+            "cold_files": len(list(self.config.cold_path.glob("*.gz"))),
+        }
+
+        if self._db_conn:
+            async with self._db_lock:
                 cursor = self._db_conn.cursor()
                 cursor.execute("SELECT COUNT(*) FROM audit_events")
                 stats["indexed_events"] = cursor.fetchone()[0]
@@ -723,13 +1029,25 @@ class AuditPersistence:
         return stats
 
     def close(self) -> None:
-        """Close persistence layer."""
-        with self._file_lock:
+        """Close persistence layer synchronously."""
+        if self._file_handle:
+            self._file_handle.close()
+            self._file_handle = None
+
+        if self._db_conn:
+            self._db_conn.close()
+            self._db_conn = None
+
+        self._initialized = False
+
+    async def close_async(self) -> None:
+        """Close persistence layer asynchronously (Issue #73)."""
+        async with self._file_lock:
             if self._file_handle:
                 self._file_handle.close()
                 self._file_handle = None
 
-        with self._db_lock:
+        async with self._db_lock:
             if self._db_conn:
                 self._db_conn.close()
                 self._db_conn = None
