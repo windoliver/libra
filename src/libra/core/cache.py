@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -78,7 +78,7 @@ class Cache:
 
         # Orders: client_order_id -> OrderResult
         self._orders: dict[str, OrderResult] = {}
-        self._order_ids: list[str] = []  # For FIFO eviction
+        self._order_ids: deque[str] = deque()  # O(1) FIFO eviction (Issue #67)
 
         # Positions: symbol -> Position
         self._positions: dict[str, Position] = {}
@@ -117,9 +117,9 @@ class Cache:
             if order_id not in self._orders:
                 self._order_ids.append(order_id)
 
-                # Evict old orders if over limit
+                # Evict old orders if over limit - O(1) with deque.popleft()
                 while len(self._order_ids) > self._max_orders:
-                    old_id = self._order_ids.pop(0)
+                    old_id = self._order_ids.popleft()
                     self._orders.pop(old_id, None)
 
             self._orders[order_id] = result
