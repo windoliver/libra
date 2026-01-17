@@ -23,12 +23,63 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 import numpy as np
+from numba import njit
 from scipy import stats
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Numba-compiled EWMA (Issue #70: ~50x speedup)
+# =============================================================================
+
+
+@njit(cache=True, fastmath=True)
+def _ewma_volatility_numba(returns: np.ndarray, lam: float) -> float:
+    """
+    Numba JIT-compiled EWMA volatility calculation.
+
+    Uses RiskMetrics methodology with decay factor lambda.
+    Compiled to native code for ~50x speedup over pure Python.
+
+    Args:
+        returns: Historical returns array
+        lam: Decay factor (typically 0.94 for daily data)
+
+    Returns:
+        EWMA volatility estimate
+    """
+    n = len(returns)
+    if n == 0:
+        return 0.0
+
+    # Calculate mean (manual for Numba compatibility)
+    mean = 0.0
+    for i in range(n):
+        mean += returns[i]
+    mean /= n
+
+    # Calculate initial variance (ddof=1)
+    variance = 0.0
+    for i in range(n):
+        variance += (returns[i] - mean) ** 2
+    if n > 1:
+        variance /= n - 1
+    else:
+        variance = 0.0
+
+    # Apply EWMA recursion
+    for i in range(1, n):
+        variance = lam * variance + (1.0 - lam) * returns[i] ** 2
+
+    return np.sqrt(variance)
+
+
+# Warmup JIT compilation at module load (compiles once, cached to disk)
+_ewma_volatility_numba(np.array([0.01, -0.01, 0.02], dtype=np.float64), 0.94)
 
 
 class VaRMethod(Enum):
@@ -564,6 +615,7 @@ class VaRCalculator:
         Calculate EWMA (Exponentially Weighted Moving Average) volatility.
 
         Uses RiskMetrics methodology with decay factor lambda.
+        Delegates to Numba JIT-compiled function for ~50x speedup (Issue #70).
 
         Args:
             returns: Historical returns
@@ -571,17 +623,7 @@ class VaRCalculator:
         Returns:
             EWMA volatility estimate
         """
-        lam = self.config.ewma_lambda
-        n = len(returns)
-
-        # Initialize with sample variance
-        variance = float(np.var(returns, ddof=1))
-
-        # Apply EWMA
-        for i in range(1, n):
-            variance = lam * variance + (1 - lam) * returns[i] ** 2
-
-        return np.sqrt(variance)
+        return _ewma_volatility_numba(returns, self.config.ewma_lambda)
 
     def backtest_var(
         self,
