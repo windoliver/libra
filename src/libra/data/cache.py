@@ -76,9 +76,9 @@ class CacheStats:
 # =============================================================================
 
 
-@dataclass
+@dataclass(slots=True)
 class CacheEntry(Generic[V]):
-    """Single cache entry with metadata."""
+    """Single cache entry with metadata (Issue #69: slots=True for memory efficiency)."""
 
     value: V
     created_at: float  # time.time()
