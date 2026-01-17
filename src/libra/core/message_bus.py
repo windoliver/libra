@@ -30,9 +30,9 @@ Handler = Callable[[Event], Coroutine[Any, Any, None]]
 EventFilter = Callable[[Event], bool]
 
 
-@dataclass
+@dataclass(slots=True)
 class Subscription:
-    """Handler subscription with optional filtering."""
+    """Handler subscription with optional filtering (Issue #68: slots=True for 20% memory reduction)."""
 
     id: int
     event_type: EventType
