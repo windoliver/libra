@@ -20,12 +20,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import timedelta
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 import polars as pl
+from lru import LRU
 
 
 logger = logging.getLogger(__name__)
@@ -108,8 +107,11 @@ class LRUCache(Generic[K, V]):
     """
     Thread-safe LRU cache with TTL support.
 
+    Uses lru-dict C extension for ~14x faster performance and ~3.6x memory reduction
+    compared to OrderedDict (Issue #66).
+
     Features:
-    - O(1) get/set operations
+    - O(1) get/set operations (C-optimized)
     - LRU eviction when max_size reached
     - Optional TTL for entries
     - Hit/miss statistics
@@ -145,9 +147,15 @@ class LRUCache(Generic[K, V]):
         """
         self._max_size = max_size
         self._default_ttl = default_ttl
-        self._cache: OrderedDict[K, CacheEntry[V]] = OrderedDict()
-        self._lock = asyncio.Lock()
         self._stats = CacheStats(max_size=max_size)
+        # Use lru-dict C extension with eviction callback for stats tracking
+        self._cache: LRU = LRU(max_size, callback=self._on_evict)
+        self._lock = asyncio.Lock()
+
+    def _on_evict(self, key: K, value: CacheEntry[V]) -> None:  # noqa: ARG002
+        """Callback when an entry is evicted due to capacity overflow."""
+        del key, value  # Required by lru-dict callback signature
+        self._stats.evictions += 1
 
     @property
     def stats(self) -> CacheStats:
@@ -166,7 +174,8 @@ class LRUCache(Generic[K, V]):
             Cached value or None if miss/expired
         """
         async with self._lock:
-            entry = self._cache.get(key)
+            # lru-dict returns None for missing keys with .get()
+            entry: CacheEntry[V] | None = self._cache.get(key)
 
             if entry is None:
                 self._stats.misses += 1
@@ -178,8 +187,8 @@ class LRUCache(Generic[K, V]):
                 self._stats.expirations += 1
                 return None
 
-            # Move to end (most recently used)
-            self._cache.move_to_end(key)
+            # Access via [] to trigger LRU reordering (lru-dict does this automatically)
+            _ = self._cache[key]
             entry.touch()
             self._stats.hits += 1
             return entry.value
@@ -210,15 +219,9 @@ class LRUCache(Generic[K, V]):
                 expires_at=expires_at,
             )
 
-            # Update or add
-            if key in self._cache:
-                self._cache.move_to_end(key)
+            # lru-dict automatically handles LRU reordering on set and eviction
+            # when capacity is exceeded (eviction callback tracks stats)
             self._cache[key] = entry
-
-            # Evict if over capacity
-            while len(self._cache) > self._max_size:
-                self._cache.popitem(last=False)
-                self._stats.evictions += 1
 
     async def delete(self, key: K) -> bool:
         """
@@ -281,7 +284,7 @@ class LRUCache(Generic[K, V]):
 
     def get_sync(self, key: K) -> V | None:
         """Synchronous get (use with caution in async context)."""
-        entry = self._cache.get(key)
+        entry: CacheEntry[V] | None = self._cache.get(key)
         if entry is None:
             self._stats.misses += 1
             return None
@@ -290,7 +293,8 @@ class LRUCache(Generic[K, V]):
             self._stats.misses += 1
             self._stats.expirations += 1
             return None
-        self._cache.move_to_end(key)
+        # Access via [] to trigger LRU reordering
+        _ = self._cache[key]
         entry.touch()
         self._stats.hits += 1
         return entry.value
@@ -306,13 +310,8 @@ class LRUCache(Generic[K, V]):
             expires_at=expires_at,
         )
 
-        if key in self._cache:
-            self._cache.move_to_end(key)
+        # lru-dict automatically handles LRU reordering and eviction
         self._cache[key] = entry
-
-        while len(self._cache) > self._max_size:
-            self._cache.popitem(last=False)
-            self._stats.evictions += 1
 
 
 # =============================================================================
