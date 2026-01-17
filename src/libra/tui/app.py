@@ -313,6 +313,9 @@ class LibraApp(App):
         self._cached_prediction_dashboard: PredictionMarketDashboard | None = None
         self._cached_whale_alerts: WhaleAlertsDashboard | None = None
         self._cached_funding_dashboard: FundingRateDashboard | None = None
+        # Cached DataTable refs for hot path (Issue #71)
+        self._cached_positions_table: DataTable | None = None
+        self._cached_positions_detail_table: DataTable | None = None
 
     # =========================================================================
     # System Commands (Command Palette)
@@ -498,6 +501,17 @@ class LibraApp(App):
             self._cached_whale_alerts = self.query_one(
                 "#whale-alerts-dashboard", WhaleAlertsDashboard
             )
+        except Exception:
+            pass
+        # Cache DataTable references for hot path (Issue #71)
+        try:
+            self._cached_positions_table = self.query_one(PositionDisplay).query_one(DataTable)
+        except Exception:
+            pass
+        try:
+            self._cached_positions_detail_table = self.query_one(
+                "#positions-detail", PositionDisplay
+            ).query_one(DataTable)
         except Exception:
             pass
 
@@ -1115,17 +1129,19 @@ class LibraApp(App):
         ]
 
     def _update_positions(self) -> None:
-        """Update position tables with CVD-friendly icons."""
-        for selector in [PositionDisplay, "#positions-detail"]:
-            try:
-                if isinstance(selector, str):
-                    table = self.query_one(selector, PositionDisplay).query_one(DataTable)
-                else:
-                    table = self.query_one(selector).query_one(DataTable)
-                table.clear()
-                self._add_position_rows(table)
-            except Exception:
-                pass
+        """Update position tables with CVD-friendly icons.
+
+        Uses cached DataTable references to avoid DOM traversal (Issue #71).
+        Called every 2 seconds - hot path optimization.
+        """
+        # Use cached refs instead of query_one() for performance
+        for table in [self._cached_positions_table, self._cached_positions_detail_table]:
+            if table is not None:
+                try:
+                    table.clear()
+                    self._add_position_rows(table)
+                except Exception:
+                    pass
 
     def _add_position_rows(self, table: DataTable) -> None:
         """Add position rows with CVD-friendly icons."""
