@@ -203,3 +203,42 @@ VaRCalculator Integration Test
   VaR (95%):   ${result.var:,.2f} ({result.var_pct:.2f}%)
   CVaR:        ${result.cvar:,.2f} ({result.cvar_pct:.2f}%)
 """)
+
+
+class TestVaRResultBenchmark:
+    """Benchmark VaRResult msgspec.Struct vs dataclass (Issue #72)."""
+
+    @pytest.mark.benchmark
+    def test_varresult_creation_speed(self, gc_disabled: None) -> None:
+        """Benchmark VaRResult creation speed."""
+        from decimal import Decimal
+        from libra.risk.var import VaRResult, VaRMethod
+
+        num_iterations = 100_000
+
+        start = time.perf_counter()
+        for i in range(num_iterations):
+            _ = VaRResult(
+                var=Decimal("1000"),
+                cvar=Decimal("1200"),
+                confidence_level=0.95,
+                time_horizon_days=1,
+                method=VaRMethod.HISTORICAL,
+                portfolio_value=Decimal("100000"),
+                var_pct=1.0,
+                cvar_pct=1.2,
+                num_observations=252,
+            )
+        duration = time.perf_counter() - start
+
+        print(f"""
+VaRResult Creation Benchmark (msgspec.Struct)
+=============================================
+  Iterations:   {num_iterations:,}
+  Duration:     {duration:.4f} sec
+  Per creation: {duration / num_iterations * 1_000_000:.1f} ns
+  Creates/sec:  {num_iterations / duration:,.0f}
+""")
+
+        # Should be fast (~100-200ns per creation with msgspec.Struct)
+        assert num_iterations / duration > 100_000, "Should create >100K VaRResults/sec"

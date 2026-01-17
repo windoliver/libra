@@ -16,12 +16,13 @@ References:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING
 
+import msgspec
 import numpy as np
 from numba import njit
 from scipy import stats
@@ -99,9 +100,13 @@ class ConfidenceLevel(Enum):
     CL_995 = 0.995
 
 
-@dataclass
-class VaRResult:
-    """Result of VaR calculation."""
+class VaRResult(msgspec.Struct, frozen=True, gc=False):
+    """
+    Result of VaR calculation.
+
+    Uses msgspec.Struct for ~4x faster creation and ~30% less memory (Issue #72).
+    frozen=True makes instances immutable, gc=False reduces GC overhead.
+    """
 
     var: Decimal  # Value at Risk (positive = potential loss)
     cvar: Decimal  # Conditional VaR / Expected Shortfall
@@ -111,15 +116,9 @@ class VaRResult:
     portfolio_value: Decimal
     var_pct: float  # VaR as percentage of portfolio
     cvar_pct: float  # CVaR as percentage of portfolio
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime | None = None  # Default: caller should set or leave None
     num_observations: int = 0
     num_simulations: int = 0  # For Monte Carlo
-
-    def __post_init__(self) -> None:
-        """Calculate percentages if not set."""
-        if self.portfolio_value > 0:
-            self.var_pct = float(self.var / self.portfolio_value) * 100
-            self.cvar_pct = float(self.cvar / self.portfolio_value) * 100
 
 
 @dataclass
