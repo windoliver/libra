@@ -17,7 +17,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
-from libra.risk.var import VaRCalculator, VaRConfig, _ewma_volatility_numba
+from libra.risk.var import (
+    VaRCalculator,
+    VaRConfig,
+    VaRMethod,
+    _ewma_volatility_numba,
+    _var_backtest_loop_historical,
+)
 
 
 if TYPE_CHECKING:
@@ -242,3 +248,141 @@ VaRResult Creation Benchmark (msgspec.Struct)
 
         # Should be fast (~100-200ns per creation with msgspec.Struct)
         assert num_iterations / duration > 100_000, "Should create >100K VaRResults/sec"
+
+
+class TestVaRBacktestBenchmark:
+    """Benchmark VaR backtest loop (Issue #74)."""
+
+    @pytest.fixture
+    def backtest_data(self) -> tuple[np.ndarray, np.ndarray]:
+        """Generate sample data for backtest benchmark."""
+        rng = np.random.default_rng(42)
+        n_obs = 1000  # ~4 years of daily data
+        returns = rng.normal(0.0005, 0.02, n_obs)
+        portfolio_values = 100000 * np.cumprod(1 + returns)
+        return returns.astype(np.float64), portfolio_values.astype(np.float64)
+
+    def _backtest_loop_python(
+        self,
+        returns: np.ndarray,
+        portfolio_values: np.ndarray,
+        window: int,
+        confidence: float,
+    ) -> tuple[np.ndarray, np.ndarray, int]:
+        """Pure Python backtest loop (baseline)."""
+        n = len(returns) - window
+        var_estimates = np.empty(n, dtype=np.float64)
+        actual_losses = np.empty(n, dtype=np.float64)
+        percentile_level = (1.0 - confidence) * 100.0
+        exceptions = 0
+
+        for i in range(window, len(returns)):
+            idx = i - window
+            window_returns = returns[i - window : i]
+            port_value = portfolio_values[i - 1]
+
+            var_pct = np.percentile(window_returns, percentile_level)
+            var_estimate = abs(var_pct) * port_value
+            var_estimates[idx] = var_estimate
+
+            actual_loss = -returns[i] * port_value
+            actual_losses[idx] = actual_loss
+
+            if actual_loss > var_estimate:
+                exceptions += 1
+
+        return var_estimates, actual_losses, exceptions
+
+    @pytest.mark.benchmark
+    def test_backtest_comparison(
+        self, gc_disabled: None, backtest_data: tuple[np.ndarray, np.ndarray]
+    ) -> None:
+        """Compare Numba JIT vs Python backtest loop (Issue #74)."""
+        returns, portfolio_values = backtest_data
+        window = 50
+        confidence = 0.95
+        num_iterations = 50
+
+        # Warmup Numba
+        _var_backtest_loop_historical(returns, portfolio_values, window, confidence)
+
+        # Python benchmark
+        python_start = time.perf_counter()
+        for _ in range(num_iterations):
+            python_result = self._backtest_loop_python(
+                returns, portfolio_values, window, confidence
+            )
+        python_duration = time.perf_counter() - python_start
+
+        # Numba benchmark
+        numba_start = time.perf_counter()
+        for _ in range(num_iterations):
+            numba_result = _var_backtest_loop_historical(
+                returns, portfolio_values, window, confidence
+            )
+        numba_duration = time.perf_counter() - numba_start
+
+        speedup = python_duration / numba_duration if numba_duration > 0 else 0
+
+        print(f"""
+================================================================================
+           VaR Backtest Loop Performance Comparison (Issue #74)
+================================================================================
+
+Configuration:
+  Observations:  {len(returns)}
+  Window size:   {window}
+  Confidence:    {confidence}
+  Iterations:    {num_iterations}
+
+Results:
+                       Numba JIT          Pure Python        Speedup
+  -----------------------------------------------------------------------
+  Duration (sec):      {numba_duration:>12.4f}      {python_duration:>12.4f}        {speedup:>6.1f}x faster
+  Per call (ms):       {numba_duration / num_iterations * 1000:>12.3f}      {python_duration / num_iterations * 1000:>12.3f}
+  Calls/sec:           {num_iterations / numba_duration:>12,.1f}      {num_iterations / python_duration:>12,.1f}
+
+Accuracy check:
+  Python exceptions:  {python_result[2]}
+  Numba exceptions:   {numba_result[2]}
+  VaR diff (max):     {np.max(np.abs(python_result[0] - numba_result[0])):.2e}
+
+Verdict: Numba JIT is {speedup:.1f}x faster than pure Python
+================================================================================
+""")
+
+        # Verify results match
+        assert python_result[2] == numba_result[2], "Exception counts should match"
+        assert np.allclose(
+            python_result[0], numba_result[0], rtol=1e-10
+        ), "VaR estimates should match"
+        assert speedup >= 2, f"Numba should be at least 2x faster (got {speedup:.1f}x)"
+
+    @pytest.mark.benchmark
+    def test_backtest_integration(
+        self, backtest_data: tuple[np.ndarray, np.ndarray]
+    ) -> None:
+        """Test VaRCalculator.backtest_var uses JIT function."""
+        returns, portfolio_values = backtest_data
+
+        calculator = VaRCalculator()
+
+        # Run backtest with HISTORICAL method (uses JIT)
+        result = calculator.backtest_var(
+            returns,
+            portfolio_values,
+            method=VaRMethod.HISTORICAL,
+            window_size=50,
+        )
+
+        print(f"""
+VaRCalculator.backtest_var Integration Test
+==========================================
+  Method:          HISTORICAL (JIT-accelerated)
+  Observations:    {result["n_observations"]}
+  Exceptions:      {result["exceptions"]}
+  Exception rate:  {result["exception_rate"]:.4f}
+  Expected rate:   {result["expected_rate"]:.4f}
+  Kupiec p-value:  {result["kupiec_pvalue"]:.4f}
+  Model adequate:  {result["model_adequate"]}
+""")

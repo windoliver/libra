@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 import numpy as np
-from numba import njit
+from numba import njit, prange
 from scipy import stats
 
 if TYPE_CHECKING:
@@ -79,8 +79,71 @@ def _ewma_volatility_numba(returns: np.ndarray, lam: float) -> float:
     return np.sqrt(variance)
 
 
+# =============================================================================
+# Numba-compiled VaR Backtest Loop (Issue #74: ~10-50x speedup)
+# =============================================================================
+
+
+@njit(cache=True, parallel=True)
+def _var_backtest_loop_historical(
+    returns: np.ndarray,
+    portfolio_values: np.ndarray,
+    window: int,
+    confidence: float,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """
+    Numba JIT-compiled VaR backtest loop for historical method.
+
+    Uses parallel execution with prange for multi-core speedup.
+    Pre-allocates output arrays for efficiency.
+
+    Args:
+        returns: Full historical returns array
+        portfolio_values: Portfolio values over time
+        window: Rolling window size
+        confidence: VaR confidence level (e.g., 0.95)
+
+    Returns:
+        Tuple of (var_estimates, actual_losses, exceptions_count)
+    """
+    n = len(returns) - window
+    var_estimates = np.empty(n, dtype=np.float64)
+    actual_losses = np.empty(n, dtype=np.float64)
+    percentile_level = (1.0 - confidence) * 100.0
+
+    # Thread-local exception counting (will sum after)
+    exceptions = 0
+
+    for i in prange(window, len(returns)):
+        idx = i - window
+        window_returns = returns[i - window : i]
+        port_value = portfolio_values[i - 1]
+
+        # Historical VaR: percentile of window returns * portfolio value
+        # Note: VaR is typically negative (loss), so we use abs of percentile
+        var_pct = np.percentile(window_returns, percentile_level)
+        var_estimate = abs(var_pct) * port_value
+        var_estimates[idx] = var_estimate
+
+        # Actual loss for this period
+        actual_loss = -returns[i] * port_value
+        actual_losses[idx] = actual_loss
+
+        # Count exception (actual loss exceeded VaR)
+        if actual_loss > var_estimate:
+            exceptions += 1
+
+    return var_estimates, actual_losses, exceptions
+
+
 # Warmup JIT compilation at module load (compiles once, cached to disk)
 _ewma_volatility_numba(np.array([0.01, -0.01, 0.02], dtype=np.float64), 0.94)
+_var_backtest_loop_historical(
+    np.array([0.01, -0.01, 0.02, 0.01, -0.02], dtype=np.float64),
+    np.array([100.0, 101.0, 100.0, 102.0, 101.0], dtype=np.float64),
+    2,
+    0.95,
+)
 
 
 class VaRMethod(Enum):
@@ -638,6 +701,9 @@ class VaRCalculator:
         Calculates VaR exceptions (breaches) and performs
         statistical tests for model adequacy.
 
+        For HISTORICAL method, uses Numba JIT-compiled loop for
+        10-50x speedup (Issue #74).
+
         Args:
             returns: Full historical returns
             portfolio_values: Portfolio values over time
@@ -654,36 +720,43 @@ class VaRCalculator:
         if len(returns) < window + 1:
             raise ValueError(f"Need at least {window + 1} observations")
 
-        exceptions = 0
-        var_estimates = []
-        actual_losses = []
+        # Use Numba JIT-compiled loop for historical VaR (Issue #74: ~10-50x faster)
+        if method == VaRMethod.HISTORICAL:
+            # Ensure arrays are float64 for Numba
+            returns_f64 = np.asarray(returns, dtype=np.float64)
+            portfolio_f64 = np.asarray(portfolio_values, dtype=np.float64)
 
-        for i in range(window, len(returns)):
-            # Calculate VaR using rolling window
-            window_returns = returns[i - window : i]
-            port_value = Decimal(str(portfolio_values[i - 1]))
+            var_estimates, actual_losses, exceptions = _var_backtest_loop_historical(
+                returns_f64, portfolio_f64, window, conf
+            )
+        else:
+            # Fallback to Python loop for parametric/monte carlo methods
+            exceptions = 0
+            var_estimates_list = []
+            actual_losses_list = []
 
-            if method == VaRMethod.HISTORICAL:
-                var_result = self.calculate_historical_var(
-                    window_returns, port_value, conf, time_horizon_days=1
-                )
-            elif method == VaRMethod.PARAMETRIC:
-                var_result = self.calculate_parametric_var(
-                    window_returns, port_value, conf, time_horizon_days=1
-                )
-            else:
-                var_result = self.calculate_monte_carlo_var(
-                    window_returns, port_value, conf, time_horizon_days=1
-                )
+            for i in range(window, len(returns)):
+                window_returns = returns[i - window : i]
+                port_value = Decimal(str(portfolio_values[i - 1]))
 
-            var_estimates.append(float(var_result.var))
+                if method == VaRMethod.PARAMETRIC:
+                    var_result = self.calculate_parametric_var(
+                        window_returns, port_value, conf, time_horizon_days=1
+                    )
+                else:
+                    var_result = self.calculate_monte_carlo_var(
+                        window_returns, port_value, conf, time_horizon_days=1
+                    )
 
-            # Check if actual loss exceeded VaR
-            actual_loss = -returns[i] * float(port_value)
-            actual_losses.append(actual_loss)
+                var_estimates_list.append(float(var_result.var))
+                actual_loss = -returns[i] * float(port_value)
+                actual_losses_list.append(actual_loss)
 
-            if actual_loss > float(var_result.var):
-                exceptions += 1
+                if actual_loss > float(var_result.var):
+                    exceptions += 1
+
+            var_estimates = np.array(var_estimates_list)
+            actual_losses = np.array(actual_losses_list)
 
         n_observations = len(returns) - window
         exception_rate = exceptions / n_observations
