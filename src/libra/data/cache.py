@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
 import polars as pl
+from cachetools import TTLCache
 from lru import LRU
 
 
@@ -312,6 +314,191 @@ class LRUCache(Generic[K, V]):
 
         # lru-dict automatically handles LRU reordering and eviction
         self._cache[key] = entry
+
+
+# =============================================================================
+# Hybrid L1/L2 Cache (Issue #77)
+# =============================================================================
+
+
+class HybridCache(Generic[K, V]):
+    """
+    Two-tier hybrid cache with L1 (hot) and L2 (warm) tiers.
+
+    L1: lru-dict LRU - ultra-fast C extension for hot data
+    L2: TTLCache - larger capacity with TTL for warm data
+
+    Access pattern:
+    1. Check L1 (hot) first - O(1) C-optimized
+    2. On L1 miss, check L2 (warm)
+    3. On L2 hit, promote to L1
+    4. Items evicted from L1 demote to L2
+
+    This provides:
+    - Ultra-fast access for frequently used items (L1)
+    - Automatic TTL expiration for warm items (L2)
+    - Graceful degradation under memory pressure
+
+    Issue #77: https://github.com/windoliver/libra/issues/77
+
+    Example:
+        cache = HybridCache[str, dict](l1_size=100, l2_size=1000, ttl=300)
+
+        # Set value (goes to L1)
+        cache.set("key1", {"data": "value"})
+
+        # Get value (checks L1 first, then L2)
+        value = cache.get("key1")
+
+        # Check L1 hit rate
+        print(f"L1 hit rate: {cache.l1_hit_rate:.1%}")
+    """
+
+    def __init__(
+        self,
+        l1_size: int = 1000,
+        l2_size: int = 10000,
+        ttl: float = 300.0,
+    ) -> None:
+        """
+        Initialize hybrid cache.
+
+        Args:
+            l1_size: L1 (hot) tier max size
+            l2_size: L2 (warm) tier max size
+            ttl: TTL for L2 entries in seconds
+        """
+        self._l1_size = l1_size
+        self._l2_size = l2_size
+        self._ttl = ttl
+
+        # L1: lru-dict C extension - ultra-fast, small capacity
+        # On eviction, demote to L2
+        self._l1: LRU = LRU(l1_size, callback=self._on_l1_evict)
+
+        # L2: TTLCache - larger capacity with automatic expiration
+        self._l2: TTLCache[K, V] = TTLCache(maxsize=l2_size, ttl=ttl)
+
+        # Thread-safe lock (RLock for nested calls)
+        self._lock = threading.RLock()
+
+        # Stats
+        self._l1_hits = 0
+        self._l2_hits = 0
+        self._misses = 0
+        self._promotions = 0
+        self._demotions = 0
+
+    def _on_l1_evict(self, key: K, value: V) -> None:
+        """Demote evicted L1 entry to L2."""
+        # Note: Lock already held by caller during LRU eviction
+        self._l2[key] = value
+        self._demotions += 1
+
+    @property
+    def l1_hit_rate(self) -> float:
+        """L1 hit rate (0.0 to 1.0)."""
+        total = self._l1_hits + self._l2_hits + self._misses
+        return self._l1_hits / total if total > 0 else 0.0
+
+    @property
+    def overall_hit_rate(self) -> float:
+        """Overall hit rate (0.0 to 1.0)."""
+        total = self._l1_hits + self._l2_hits + self._misses
+        return (self._l1_hits + self._l2_hits) / total if total > 0 else 0.0
+
+    @property
+    def stats(self) -> dict[str, int | float]:
+        """Get cache statistics."""
+        with self._lock:
+            return {
+                "l1_hits": self._l1_hits,
+                "l2_hits": self._l2_hits,
+                "misses": self._misses,
+                "promotions": self._promotions,
+                "demotions": self._demotions,
+                "l1_size": len(self._l1),
+                "l2_size": len(self._l2),
+                "l1_hit_rate": self.l1_hit_rate,
+                "overall_hit_rate": self.overall_hit_rate,
+            }
+
+    def get(self, key: K) -> V | None:
+        """
+        Get value from cache (sync).
+
+        Checks L1 first, then L2. Promotes L2 hits to L1.
+        """
+        with self._lock:
+            # Check L1 (hot tier) first
+            value = self._l1.get(key)
+            if value is not None:
+                self._l1_hits += 1
+                return value
+
+            # Check L2 (warm tier)
+            value = self._l2.get(key)
+            if value is not None:
+                self._l2_hits += 1
+                # Promote to L1 (may trigger demotion of another item)
+                self._l1[key] = value
+                del self._l2[key]
+                self._promotions += 1
+                return value
+
+            self._misses += 1
+            return None
+
+    def set(self, key: K, value: V) -> None:
+        """
+        Set value in cache (sync).
+
+        Always inserts into L1 (hot tier).
+        """
+        with self._lock:
+            # Remove from L2 if exists (will be in L1 now)
+            if key in self._l2:
+                del self._l2[key]
+
+            # Insert into L1 (may trigger eviction -> demotion to L2)
+            self._l1[key] = value
+
+    def delete(self, key: K) -> bool:
+        """Delete from both tiers."""
+        with self._lock:
+            deleted = False
+            if key in self._l1:
+                del self._l1[key]
+                deleted = True
+            if key in self._l2:
+                del self._l2[key]
+                deleted = True
+            return deleted
+
+    def clear(self) -> None:
+        """Clear both tiers."""
+        with self._lock:
+            self._l1.clear()
+            self._l2.clear()
+
+    def reset_stats(self) -> None:
+        """Reset hit/miss counters."""
+        with self._lock:
+            self._l1_hits = 0
+            self._l2_hits = 0
+            self._misses = 0
+            self._promotions = 0
+            self._demotions = 0
+
+    def __contains__(self, key: K) -> bool:
+        """Check if key exists in either tier."""
+        with self._lock:
+            return key in self._l1 or key in self._l2
+
+    def __len__(self) -> int:
+        """Total entries in both tiers."""
+        with self._lock:
+            return len(self._l1) + len(self._l2)
 
 
 # =============================================================================

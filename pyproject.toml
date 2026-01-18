@@ -13,6 +13,7 @@ keywords = ["trading", "algorithmic-trading", "message-bus", "async", "high-perf
 dependencies = [
     # Core
     "lru-dict>=1.3",                           # 14x faster LRU cache (Issue #66)
+    "cachetools>=5.3",                         # TTLCache for L2 tier (Issue #77)
     "numba>=0.59",                             # JIT compilation for numerical loops (Issue #70)
     "msgspec>=0.18",                           # Fast structs (4x faster than dataclass)
     "aiofiles>=24.1",                          # Async file I/O (Issue #73)

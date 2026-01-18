@@ -19,6 +19,7 @@ from libra.data.cache import (
     CacheEntry,
     CacheStats,
     DataFrameCache,
+    HybridCache,
     LRUCache,
 )
 
@@ -439,3 +440,187 @@ class TestAggregationCache:
         assert "5m" in stats
         assert "1h" in stats
         assert "1d" in stats
+
+
+class TestHybridCache:
+    """Tests for HybridCache (Issue #77)."""
+
+    def test_set_and_get(self) -> None:
+        """Test basic set and get operations."""
+        cache: HybridCache[str, str] = HybridCache(l1_size=10, l2_size=100)
+
+        cache.set("key1", "value1")
+        result = cache.get("key1")
+
+        assert result == "value1"
+
+    def test_l1_hit(self) -> None:
+        """Test L1 hit increments stats."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=10, l2_size=100)
+
+        cache.set("key", 42)
+        cache.get("key")  # Should hit L1
+
+        assert cache.stats["l1_hits"] == 1
+        assert cache.stats["l2_hits"] == 0
+        assert cache.stats["misses"] == 0
+
+    def test_l2_hit_and_promotion(self) -> None:
+        """Test L2 hit promotes item to L1."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=2, l2_size=100)
+
+        # Fill L1 and cause demotion
+        cache.set("key1", 1)
+        cache.set("key2", 2)
+        cache.set("key3", 3)  # Evicts key1 to L2
+
+        # key1 should now be in L2
+        assert cache.stats["demotions"] == 1
+
+        # Access key1 - should promote from L2 to L1
+        result = cache.get("key1")
+
+        assert result == 1
+        assert cache.stats["l2_hits"] == 1
+        assert cache.stats["promotions"] == 1
+
+    def test_miss(self) -> None:
+        """Test cache miss."""
+        cache: HybridCache[str, str] = HybridCache(l1_size=10, l2_size=100)
+
+        result = cache.get("nonexistent")
+
+        assert result is None
+        assert cache.stats["misses"] == 1
+
+    def test_eviction_demotion(self) -> None:
+        """Test items evicted from L1 are demoted to L2."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=2, l2_size=100)
+
+        # Fill L1
+        cache.set("key1", 1)
+        cache.set("key2", 2)
+
+        # This should evict oldest (key1) to L2
+        cache.set("key3", 3)
+
+        assert cache.stats["demotions"] == 1
+
+        # key1 should still be accessible (from L2)
+        result = cache.get("key1")
+        assert result == 1
+
+    def test_delete(self) -> None:
+        """Test deleting from both tiers."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=2, l2_size=100)
+
+        cache.set("key1", 1)
+        cache.set("key2", 2)
+        cache.set("key3", 3)  # Demotes key1 to L2
+
+        # Delete from L1
+        result1 = cache.delete("key3")
+        assert result1 is True
+
+        # Delete from L2 (key1 was demoted)
+        result2 = cache.delete("key1")
+        assert result2 is True
+
+        # Delete nonexistent
+        result3 = cache.delete("nonexistent")
+        assert result3 is False
+
+    def test_clear(self) -> None:
+        """Test clearing both tiers."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=2, l2_size=100)
+
+        cache.set("key1", 1)
+        cache.set("key2", 2)
+        cache.set("key3", 3)  # Demotes key1 to L2
+
+        cache.clear()
+
+        assert len(cache) == 0
+        assert cache.get("key1") is None
+        assert cache.get("key2") is None
+        assert cache.get("key3") is None
+
+    def test_contains(self) -> None:
+        """Test membership check across tiers."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=2, l2_size=100)
+
+        cache.set("key1", 1)
+        cache.set("key2", 2)
+        cache.set("key3", 3)  # Demotes key1 to L2
+
+        assert "key3" in cache  # L1
+        assert "key1" in cache  # L2
+        assert "nonexistent" not in cache
+
+    def test_len(self) -> None:
+        """Test length across both tiers."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=2, l2_size=100)
+
+        cache.set("key1", 1)
+        assert len(cache) == 1
+
+        cache.set("key2", 2)
+        assert len(cache) == 2
+
+        cache.set("key3", 3)  # Demotes key1 to L2
+        assert len(cache) == 3  # 2 in L1 + 1 in L2
+
+    def test_l1_hit_rate(self) -> None:
+        """Test L1 hit rate calculation."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=2, l2_size=100)
+
+        cache.set("key1", 1)
+        cache.set("key2", 2)
+
+        # 2 L1 hits
+        cache.get("key1")
+        cache.get("key2")
+
+        # 1 miss
+        cache.get("nonexistent")
+
+        # L1 hit rate: 2 / 3 = 0.667
+        assert abs(cache.l1_hit_rate - 2 / 3) < 0.01
+
+    def test_overall_hit_rate(self) -> None:
+        """Test overall hit rate calculation."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=2, l2_size=100)
+
+        cache.set("key1", 1)
+        cache.set("key2", 2)
+        cache.set("key3", 3)  # Demotes key1 to L2
+
+        cache.get("key2")  # L1 hit
+        cache.get("key1")  # L2 hit (promotes to L1)
+        cache.get("nonexistent")  # Miss
+
+        # Overall: 2 hits / 3 total = 0.667
+        assert abs(cache.overall_hit_rate - 2 / 3) < 0.01
+
+    def test_reset_stats(self) -> None:
+        """Test resetting statistics."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=10, l2_size=100)
+
+        cache.set("key", 1)
+        cache.get("key")
+        cache.get("miss")
+
+        cache.reset_stats()
+
+        assert cache.stats["l1_hits"] == 0
+        assert cache.stats["misses"] == 0
+
+    def test_update_existing_key(self) -> None:
+        """Test updating an existing key."""
+        cache: HybridCache[str, int] = HybridCache(l1_size=10, l2_size=100)
+
+        cache.set("key", 1)
+        cache.set("key", 2)
+
+        result = cache.get("key")
+        assert result == 2
