@@ -9,6 +9,7 @@ Performance: <1μs per check (simple arithmetic + monotonic clock).
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 
@@ -139,6 +140,46 @@ class TokenBucketRateLimiter:
         tokens_needed = tokens - self._tokens
         return tokens_needed / self.rate
 
+    async def acquire_async(self, tokens: int = 1, timeout: float = 1.0) -> bool:
+        """
+        Asynchronously acquire tokens with timeout (Issue #78).
+
+        Non-blocking rate limiter acquisition that yields to the event loop
+        while waiting for tokens to become available.
+
+        Args:
+            tokens: Number of tokens to acquire (default: 1)
+            timeout: Maximum time to wait in seconds (default: 1.0)
+
+        Returns:
+            True if tokens acquired within timeout, False otherwise
+
+        Examples:
+            limiter = TokenBucketRateLimiter(rate=10.0, capacity=100)
+
+            # Non-blocking acquisition with timeout
+            if await limiter.acquire_async(tokens=1, timeout=0.5):
+                # Proceed with order
+                ...
+            else:
+                # Timed out waiting for rate limit
+                ...
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+
+        while True:
+            if self.try_acquire(tokens):
+                return True
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+
+            # Sleep for minimum of 1ms or remaining time
+            # This balances responsiveness with CPU usage
+            await asyncio.sleep(min(0.001, remaining))
+
 
 @dataclass
 class MultiRateLimiter:
@@ -199,3 +240,30 @@ class MultiRateLimiter:
         """Reset all limiters to full capacity."""
         for limiter in self.limiters:
             limiter.reset()
+
+    async def acquire_async(self, tokens: int = 1, timeout: float = 1.0) -> bool:
+        """
+        Asynchronously acquire tokens from all limiters with timeout (Issue #78).
+
+        Non-blocking rate limiter acquisition that yields to the event loop
+        while waiting for tokens to become available on ALL limiters.
+
+        Args:
+            tokens: Number of tokens to acquire (default: 1)
+            timeout: Maximum time to wait in seconds (default: 1.0)
+
+        Returns:
+            True if tokens acquired from all limiters within timeout, False otherwise
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+
+        while True:
+            if self.try_acquire(tokens):
+                return True
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+
+            await asyncio.sleep(min(0.001, remaining))

@@ -1,5 +1,6 @@
 """Tests for TokenBucketRateLimiter."""
 
+import asyncio
 import time
 
 import pytest
@@ -211,3 +212,120 @@ class TestMultiRateLimiter:
 
         assert limiter.limiters[0].available_tokens == 10.0
         assert limiter.limiters[1].available_tokens == 60.0
+
+
+class TestAsyncRateLimiter:
+    """Tests for async rate limiter methods (Issue #78)."""
+
+    @pytest.mark.asyncio
+    async def test_acquire_async_immediate_success(self):
+        """Acquire async succeeds immediately when tokens available."""
+        limiter = TokenBucketRateLimiter(rate=10.0, capacity=100)
+
+        result = await limiter.acquire_async(tokens=1, timeout=1.0)
+
+        assert result is True
+        assert 98.0 <= limiter.available_tokens <= 100.0
+
+    @pytest.mark.asyncio
+    async def test_acquire_async_waits_for_refill(self):
+        """Acquire async waits for tokens to refill."""
+        limiter = TokenBucketRateLimiter(rate=100.0, capacity=1)  # Fast refill
+
+        # Drain the bucket
+        limiter.try_acquire()
+        assert limiter.is_empty is True
+
+        # Should wait for refill and succeed
+        start = time.monotonic()
+        result = await limiter.acquire_async(tokens=1, timeout=0.5)
+        elapsed = time.monotonic() - start
+
+        assert result is True
+        assert elapsed >= 0.005  # Should have waited at least a bit
+
+    @pytest.mark.asyncio
+    async def test_acquire_async_timeout(self):
+        """Acquire async times out when no tokens available."""
+        limiter = TokenBucketRateLimiter(rate=0.1, capacity=1)  # Very slow refill
+
+        # Drain the bucket
+        limiter.try_acquire()
+
+        # Should timeout waiting for slow refill
+        start = time.monotonic()
+        result = await limiter.acquire_async(tokens=1, timeout=0.05)
+        elapsed = time.monotonic() - start
+
+        assert result is False
+        assert 0.04 <= elapsed <= 0.1  # Should have waited ~timeout
+
+    @pytest.mark.asyncio
+    async def test_acquire_async_concurrent_access(self):
+        """Test concurrent async access to rate limiter."""
+        limiter = TokenBucketRateLimiter(rate=1000.0, capacity=10)
+
+        # Launch 10 concurrent acquisitions
+        results = await asyncio.gather(
+            *[limiter.acquire_async(tokens=1, timeout=0.5) for _ in range(10)]
+        )
+
+        # All should succeed since capacity is 10
+        assert all(results)
+        assert sum(results) == 10
+
+    @pytest.mark.asyncio
+    async def test_acquire_async_concurrent_partial_success(self):
+        """Test concurrent async access with limited capacity."""
+        limiter = TokenBucketRateLimiter(rate=10.0, capacity=5)  # Slower refill
+
+        # Launch 10 concurrent acquisitions with short timeout
+        results = await asyncio.gather(
+            *[limiter.acquire_async(tokens=1, timeout=0.05) for _ in range(10)]
+        )
+
+        # Only ~5-6 should succeed immediately (capacity + some refill)
+        successful = sum(results)
+        assert 5 <= successful <= 7
+
+    @pytest.mark.asyncio
+    async def test_acquire_async_multiple_tokens(self):
+        """Acquire async with multiple tokens."""
+        limiter = TokenBucketRateLimiter(rate=10.0, capacity=100)
+
+        result = await limiter.acquire_async(tokens=10, timeout=1.0)
+
+        assert result is True
+        assert 89.0 <= limiter.available_tokens <= 91.0
+
+    @pytest.mark.asyncio
+    async def test_multi_limiter_acquire_async_success(self):
+        """MultiRateLimiter acquire_async succeeds when all have capacity."""
+        multi = MultiRateLimiter(
+            limiters=[
+                TokenBucketRateLimiter(rate=10.0, capacity=10),
+                TokenBucketRateLimiter(rate=1.0, capacity=60),
+            ]
+        )
+
+        result = await multi.acquire_async(tokens=1, timeout=1.0)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_multi_limiter_acquire_async_timeout(self):
+        """MultiRateLimiter acquire_async times out when one limiter empty."""
+        multi = MultiRateLimiter(
+            limiters=[
+                TokenBucketRateLimiter(rate=0.1, capacity=1),  # Very slow refill
+                TokenBucketRateLimiter(rate=10.0, capacity=60),
+            ]
+        )
+
+        # Drain the first limiter
+        multi.try_acquire()
+
+        # Should timeout because first limiter is empty with slow refill
+        result = await multi.acquire_async(tokens=1, timeout=0.05)
+
+        assert result is False
