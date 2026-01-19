@@ -15,9 +15,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import queue
+import threading
 from collections import defaultdict, deque
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from libra.core.events import Event, EventType, Priority
@@ -28,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Type aliases
 Handler = Callable[[Event], Coroutine[Any, Any, None]]
 EventFilter = Callable[[Event], bool]
+PersistCallback = Callable[[Event], None]  # Sync callback for I/O thread
 
 
 @dataclass(slots=True)
@@ -65,6 +68,11 @@ class MessageBusConfig:
 
     # Dispatch
     batch_size: int = 100  # Events to process before yielding
+
+    # I/O Thread for persistence (Issue #84)
+    io_queue_size: int = 10_000  # Max events pending for persistence
+    io_thread_enabled: bool = False  # Enable MPSC I/O thread
+    io_shutdown_timeout: float = 5.0  # Seconds to wait for I/O thread shutdown
 
 
 class MessageBus:
@@ -121,6 +129,14 @@ class MessageBus:
         # Subscription ID counter
         self._sub_id = 0
 
+        # MPSC I/O Thread for persistence (Issue #84)
+        self._io_queue: queue.Queue[Event | None] | None = None
+        self._io_thread: threading.Thread | None = None
+        self._io_callback: PersistCallback | None = None
+        self._io_events_queued = 0
+        self._io_events_persisted = 0
+        self._io_events_dropped = 0
+
     # =========================================================================
     # Subscription Management
     # =========================================================================
@@ -169,6 +185,126 @@ class MessageBus:
         return False
 
     # =========================================================================
+    # MPSC I/O Thread (Issue #84)
+    # =========================================================================
+
+    def set_persist_callback(self, callback: PersistCallback) -> None:
+        """
+        Set the persistence callback for the I/O thread.
+
+        The callback is called from a separate thread for each event.
+        It should be thread-safe and handle its own errors.
+
+        Args:
+            callback: Sync function called with each event for persistence
+
+        Example:
+            def persist_to_redis(event: Event) -> None:
+                redis_client.xadd("events", event.to_dict())
+
+            bus.set_persist_callback(persist_to_redis)
+        """
+        if self._running:
+            raise RuntimeError("Cannot set persist callback while bus is running")
+        self._io_callback = callback
+
+    def _start_io_thread(self) -> None:
+        """Start the I/O worker thread for non-blocking persistence."""
+        if not self.config.io_thread_enabled:
+            return
+
+        if self._io_callback is None:
+            logger.warning("I/O thread enabled but no persist callback set")
+            return
+
+        self._io_queue = queue.Queue(maxsize=self.config.io_queue_size)
+        self._io_thread = threading.Thread(
+            target=self._io_worker,
+            name="libra-io-worker",
+            daemon=True,
+        )
+        self._io_thread.start()
+        logger.info("I/O worker thread started (queue_size=%d)", self.config.io_queue_size)
+
+    def _io_worker(self) -> None:
+        """
+        I/O worker thread - persists events without blocking main loop.
+
+        Runs in a separate thread, reading from the I/O queue and
+        calling the persist callback for each event.
+        """
+        assert self._io_queue is not None
+        assert self._io_callback is not None
+
+        while True:
+            try:
+                event = self._io_queue.get(timeout=0.1)
+
+                if event is None:
+                    # Shutdown signal
+                    logger.debug("I/O worker received shutdown signal")
+                    break
+
+                try:
+                    self._io_callback(event)
+                    self._io_events_persisted += 1
+                except Exception:
+                    logger.exception("I/O persist error for event %s", event.trace_id)
+
+            except queue.Empty:
+                # No events, continue waiting
+                continue
+
+        logger.debug("I/O worker thread exiting")
+
+    def _stop_io_thread(self) -> None:
+        """Stop the I/O worker thread gracefully."""
+        if self._io_thread is None or self._io_queue is None:
+            return
+
+        # Send shutdown signal
+        try:
+            self._io_queue.put(None, timeout=1.0)
+        except queue.Full:
+            logger.warning("I/O queue full, forcing shutdown")
+            # Clear queue and try again
+            while not self._io_queue.empty():
+                try:
+                    self._io_queue.get_nowait()
+                    self._io_events_dropped += 1
+                except queue.Empty:
+                    break
+            self._io_queue.put(None)
+
+        # Wait for thread to finish
+        self._io_thread.join(timeout=self.config.io_shutdown_timeout)
+
+        if self._io_thread.is_alive():
+            logger.warning("I/O thread did not stop gracefully")
+        else:
+            logger.info(
+                "I/O thread stopped: queued=%d persisted=%d dropped=%d",
+                self._io_events_queued,
+                self._io_events_persisted,
+                self._io_events_dropped,
+            )
+
+    def _queue_for_persistence(self, event: Event) -> None:
+        """Queue event for persistence (non-blocking)."""
+        if self._io_queue is None:
+            return
+
+        try:
+            self._io_queue.put_nowait(event)
+            self._io_events_queued += 1
+        except queue.Full:
+            self._io_events_dropped += 1
+            logger.warning(
+                "I/O queue full, event not persisted: %s",
+                event.trace_id,
+            )
+
+    # =========================================================================
     # Publishing
     # =========================================================================
 
@@ -188,10 +324,10 @@ class MessageBus:
         if not self._accepting:
             return False
 
-        queue = self._queues[Priority(event.priority)]
-        was_full = len(queue) == queue.maxlen
+        event_queue = self._queues[Priority(event.priority)]
+        was_full = len(event_queue) == event_queue.maxlen
 
-        queue.append(event)
+        event_queue.append(event)
         self._events_published += 1
 
         if was_full:
@@ -200,6 +336,9 @@ class MessageBus:
                 "Queue %s full, dropped oldest event",
                 Priority(event.priority).name,
             )
+
+        # Queue for persistence (non-blocking) - Issue #84
+        self._queue_for_persistence(event)
 
         return True
 
@@ -238,6 +377,10 @@ class MessageBus:
 
         self._running = True
         self._accepting = True
+
+        # Start I/O thread for persistence (Issue #84)
+        self._start_io_thread()
+
         logger.info("MessageBus started")
 
         while self._running:
@@ -347,6 +490,9 @@ class MessageBus:
         if self._active_tasks:
             await asyncio.gather(*self._active_tasks, return_exceptions=True)
 
+        # Stop I/O thread (Issue #84)
+        self._stop_io_thread()
+
         logger.info(
             "MessageBus stopped: published=%d dispatched=%d dropped=%d errors=%d",
             self._events_published,
@@ -401,4 +547,8 @@ class MessageBus:
             "pending": self.total_pending,
             "handlers": sum(len(h) for h in self._handlers.values()),
             "active_tasks": len(self._active_tasks),
+            # I/O Thread stats (Issue #84)
+            "io_queued": self._io_events_queued,
+            "io_persisted": self._io_events_persisted,
+            "io_dropped": self._io_events_dropped,
         }

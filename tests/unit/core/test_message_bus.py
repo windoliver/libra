@@ -398,3 +398,114 @@ class TestPerformance:
         # Should exceed 30K events/sec (lower threshold for coverage overhead)
         # Real throughput is 400K+ events/sec (see benchmarks/)
         assert throughput > 30_000
+
+
+class TestIOThread:
+    """Tests for MPSC I/O thread (Issue #84)."""
+
+    @pytest.mark.asyncio
+    async def test_io_thread_disabled_by_default(self) -> None:
+        """I/O thread should be disabled by default."""
+        bus = MessageBus()
+        assert bus._io_queue is None
+        assert bus._io_thread is None
+
+    @pytest.mark.asyncio
+    async def test_io_thread_enabled_with_callback(self) -> None:
+        """I/O thread should start when enabled with callback."""
+        persisted: list[Event] = []
+
+        def persist_callback(event: Event) -> None:
+            persisted.append(event)
+
+        config = MessageBusConfig(io_thread_enabled=True)
+        bus = MessageBus(config)
+        bus.set_persist_callback(persist_callback)
+
+        async with bus:
+            bus.publish(Event.create(EventType.TICK, "test"))
+            await asyncio.sleep(0.1)  # Give I/O thread time to process
+
+        # Event should have been persisted
+        assert len(persisted) == 1
+        assert bus.stats["io_queued"] == 1
+        assert bus.stats["io_persisted"] == 1
+
+    @pytest.mark.asyncio
+    async def test_io_thread_queue_overflow(self) -> None:
+        """I/O thread should handle queue overflow gracefully."""
+        persisted: list[Event] = []
+
+        def slow_persist(event: Event) -> None:
+            import time
+            time.sleep(0.01)  # Slow persistence
+            persisted.append(event)
+
+        config = MessageBusConfig(
+            io_thread_enabled=True,
+            io_queue_size=3,  # Small queue for testing
+        )
+        bus = MessageBus(config)
+        bus.set_persist_callback(slow_persist)
+
+        async with bus:
+            # Publish more events than queue can hold
+            for i in range(10):
+                bus.publish(Event.create(EventType.TICK, "test", {"seq": i}))
+
+        # Some events should be dropped due to queue overflow
+        assert bus.stats["io_dropped"] > 0
+        # But some should be persisted
+        assert len(persisted) > 0
+
+    @pytest.mark.asyncio
+    async def test_io_thread_graceful_shutdown(self) -> None:
+        """I/O thread should stop gracefully."""
+        persisted: list[Event] = []
+
+        def persist_callback(event: Event) -> None:
+            persisted.append(event)
+
+        config = MessageBusConfig(io_thread_enabled=True)
+        bus = MessageBus(config)
+        bus.set_persist_callback(persist_callback)
+
+        async with bus:
+            bus.publish(Event.create(EventType.TICK, "test"))
+            await asyncio.sleep(0.05)
+
+        # Thread should be stopped
+        assert bus._io_thread is None or not bus._io_thread.is_alive()
+
+    def test_cannot_set_callback_while_running(self) -> None:
+        """Should raise error if setting callback while running."""
+        bus = MessageBus()
+        bus._running = True
+
+        def callback(event: Event) -> None:
+            pass
+
+        with pytest.raises(RuntimeError, match="Cannot set persist callback"):
+            bus.set_persist_callback(callback)
+
+    @pytest.mark.asyncio
+    async def test_io_stats_tracking(self) -> None:
+        """I/O stats should be tracked correctly."""
+        persisted: list[Event] = []
+
+        def persist_callback(event: Event) -> None:
+            persisted.append(event)
+
+        config = MessageBusConfig(io_thread_enabled=True)
+        bus = MessageBus(config)
+        bus.set_persist_callback(persist_callback)
+
+        async with bus:
+            for i in range(5):
+                bus.publish(Event.create(EventType.TICK, "test", {"seq": i}))
+            await asyncio.sleep(0.2)
+
+        stats = bus.stats
+        assert stats["io_queued"] == 5
+        assert stats["io_persisted"] == 5
+        assert stats["io_dropped"] == 0
