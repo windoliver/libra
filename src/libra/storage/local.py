@@ -23,6 +23,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Reusable msgspec encoder/decoder instances (Issue #81)
+# Per msgspec docs: reuse for best performance
+# =============================================================================
+_state_encoder = msgspec.json.Encoder()
+_state_decoder = msgspec.json.Decoder(type=dict[str, Any])
+
 
 class LocalStorage:
     """
@@ -163,7 +170,7 @@ class LocalStorage:
         strategy_dir.mkdir(parents=True, exist_ok=True)
 
         state_path = self.paths.strategy_state(name)
-        data = msgspec.json.encode(state)
+        data = _state_encoder.encode(state)
         state_path.write_bytes(data)
 
         return state_path
@@ -179,7 +186,7 @@ class LocalStorage:
             return {}
 
         data = state_path.read_bytes()
-        return msgspec.json.decode(data)
+        return _state_decoder.decode(data)
 
     # =========================================================================
     # Backtest Results (Parquet)
