@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from decimal import Decimal
 
 import pytest
 
-from libra.core.cache import Cache
+from libra.core.cache import Cache, RWLock
 from libra.gateways.protocol import (
     Balance,
     OrderResult,
@@ -521,3 +523,240 @@ class TestCacheUtility:
         assert "quotes" in stats
         assert "bar_series" in stats
         assert "balances" in stats
+
+
+# =============================================================================
+# RWLock Tests (Issue #90)
+# =============================================================================
+
+
+class TestRWLock:
+    """Tests for RWLock implementation."""
+
+    @pytest.mark.asyncio
+    async def test_writer_exclusive(self) -> None:
+        """Test that writers have exclusive access."""
+        lock = RWLock()
+        results = []
+
+        async def writer(n: int) -> None:
+            async with lock.writer:
+                results.append(f"start_{n}")
+                await asyncio.sleep(0.01)
+                results.append(f"end_{n}")
+
+        # Run two writers concurrently
+        await asyncio.gather(writer(1), writer(2))
+
+        # Writers should be serialized (start_1, end_1, start_2, end_2) or vice versa
+        # Not interleaved (start_1, start_2, ...)
+        assert results[0].startswith("start_")
+        assert results[1].startswith("end_")
+        assert results[0][6] == results[1][4]  # Same writer number
+
+    @pytest.mark.asyncio
+    async def test_readers_concurrent(self) -> None:
+        """Test that multiple readers can run concurrently."""
+        lock = RWLock()
+        active_readers = []
+        max_concurrent = 0
+
+        async def reader(n: int) -> None:
+            nonlocal max_concurrent
+            async with lock.reader:
+                active_readers.append(n)
+                max_concurrent = max(max_concurrent, len(active_readers))
+                await asyncio.sleep(0.02)
+                active_readers.remove(n)
+
+        # Run 5 readers concurrently
+        await asyncio.gather(*[reader(i) for i in range(5)])
+
+        # At some point, multiple readers should have been active
+        assert max_concurrent > 1
+
+    @pytest.mark.asyncio
+    async def test_writer_waits_for_readers(self) -> None:
+        """Test that writer waits for active readers to finish."""
+        lock = RWLock()
+        events = []
+
+        async def reader() -> None:
+            async with lock.reader:
+                events.append("reader_start")
+                await asyncio.sleep(0.05)
+                events.append("reader_end")
+
+        async def writer() -> None:
+            await asyncio.sleep(0.01)  # Let reader start first
+            async with lock.writer:
+                events.append("writer")
+
+        await asyncio.gather(reader(), writer())
+
+        # Writer should wait for reader to finish
+        assert events == ["reader_start", "reader_end", "writer"]
+
+    @pytest.mark.asyncio
+    async def test_reader_count(self) -> None:
+        """Test reader_count property."""
+        lock = RWLock()
+        assert lock.reader_count == 0
+
+        async with lock.reader:
+            assert lock.reader_count == 1
+
+        assert lock.reader_count == 0
+
+    @pytest.mark.asyncio
+    async def test_is_write_locked(self) -> None:
+        """Test is_write_locked property."""
+        lock = RWLock()
+        assert lock.is_write_locked is False
+
+        async with lock.writer:
+            assert lock.is_write_locked is True
+
+        assert lock.is_write_locked is False
+
+
+class TestCacheRWLockIntegration:
+    """Integration tests for Cache with RWLock."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_reads(self, cache: Cache) -> None:
+        """Test concurrent read operations."""
+        # Add some data
+        tick = Tick(
+            symbol="BTC/USDT",
+            bid=Decimal("50000"),
+            ask=Decimal("50001"),
+            last=Decimal("50000"),
+            timestamp_ns=1000,
+        )
+        await cache.update_quote(tick)
+
+        read_count = 0
+
+        async def read_task() -> None:
+            nonlocal read_count
+            for _ in range(100):
+                _ = cache.quote("BTC/USDT")
+                read_count += 1
+
+        # Run 10 concurrent readers
+        await asyncio.gather(*[read_task() for _ in range(10)])
+
+        assert read_count == 1000
+
+    @pytest.mark.asyncio
+    async def test_concurrent_writes(self, cache: Cache) -> None:
+        """Test concurrent write operations."""
+        async def write_task(n: int) -> None:
+            tick = Tick(
+                symbol=f"SYM_{n}/USDT",
+                bid=Decimal("100"),
+                ask=Decimal("101"),
+                last=Decimal("100"),
+                timestamp_ns=n,
+            )
+            await cache.update_quote(tick)
+
+        # Run 50 concurrent writers
+        await asyncio.gather(*[write_task(i) for i in range(50)])
+
+        # All writes should succeed
+        quotes = cache.quotes()
+        assert len(quotes) == 50
+
+    @pytest.mark.asyncio
+    async def test_concurrent_read_write(self, cache: Cache) -> None:
+        """Test concurrent read and write operations."""
+        # Add initial data
+        tick = Tick(
+            symbol="BTC/USDT",
+            bid=Decimal("50000"),
+            ask=Decimal("50001"),
+            last=Decimal("50000"),
+            timestamp_ns=1000,
+        )
+        await cache.update_quote(tick)
+
+        errors = []
+
+        async def reader() -> None:
+            try:
+                for _ in range(100):
+                    quote = cache.quote("BTC/USDT")
+                    if quote is not None:
+                        _ = quote.last  # Access a property
+                    await asyncio.sleep(0)
+            except Exception as e:
+                errors.append(str(e))
+
+        async def writer() -> None:
+            try:
+                for i in range(100):
+                    tick = Tick(
+                        symbol="BTC/USDT",
+                        bid=Decimal(f"{50000 + i}"),
+                        ask=Decimal(f"{50001 + i}"),
+                        last=Decimal(f"{50000 + i}"),
+                        timestamp_ns=1000 + i,
+                    )
+                    await cache.update_quote(tick)
+                    await asyncio.sleep(0)
+            except Exception as e:
+                errors.append(str(e))
+
+        # Run readers and writers concurrently
+        await asyncio.gather(
+            *[reader() for _ in range(5)],
+            *[writer() for _ in range(3)],
+        )
+
+        assert len(errors) == 0, f"Errors: {errors}"
+
+    @pytest.mark.asyncio
+    async def test_cache_uses_single_lock(self, cache: Cache) -> None:
+        """Test that cache uses single RWLock instead of 5 separate locks."""
+        # Verify the cache has _rwlock attribute
+        assert hasattr(cache, "_rwlock")
+        assert isinstance(cache._rwlock, RWLock)
+
+        # Verify old lock attributes don't exist
+        assert not hasattr(cache, "_order_lock")
+        assert not hasattr(cache, "_position_lock")
+        assert not hasattr(cache, "_quote_lock")
+        assert not hasattr(cache, "_bar_lock")
+        assert not hasattr(cache, "_balance_lock")
+
+
+class TestRWLockPerformance:
+    """Performance tests for RWLock (Issue #90)."""
+
+    @pytest.mark.asyncio
+    async def test_lock_acquisition_overhead(self) -> None:
+        """Benchmark lock acquisition overhead."""
+        lock = RWLock()
+
+        # Measure reader lock acquisition
+        start = time.perf_counter()
+        for _ in range(1000):
+            async with lock.reader:
+                pass
+        reader_time = time.perf_counter() - start
+
+        # Measure writer lock acquisition
+        start = time.perf_counter()
+        for _ in range(1000):
+            async with lock.writer:
+                pass
+        writer_time = time.perf_counter() - start
+
+        # Should complete reasonably fast (< 1 second for 1000 iterations)
+        assert reader_time < 1.0, f"Reader time: {reader_time:.3f}s"
+        assert writer_time < 1.0, f"Writer time: {writer_time:.3f}s"
+
+        print(f"Reader lock avg: {reader_time * 1000:.3f}ms per 1000 ops")
+        print(f"Writer lock avg: {writer_time * 1000:.3f}ms per 1000 ops")
