@@ -511,12 +511,12 @@ class CorrelationMonitor:
         cov_matrix = np.cov(returns_matrix, rowvar=False)
         volatilities = np.sqrt(np.diag(cov_matrix))
 
-        # Portfolio volatility
-        port_variance = w @ cov_matrix @ w
+        # Portfolio volatility (Issue #95: einsum ~15% faster for small matrices)
+        port_variance = np.einsum('i,ij,j->', w, cov_matrix, w)
         port_vol = np.sqrt(port_variance)
 
         # Weighted average volatility (if uncorrelated)
-        weighted_vol = w @ volatilities
+        weighted_vol = np.einsum('i,i->', w, volatilities)
 
         # Diversification ratio
         div_ratio = weighted_vol / port_vol if port_vol > 0 else 1.0
@@ -528,7 +528,7 @@ class CorrelationMonitor:
         # Marginal risk contribution
         marginal_risk = {}
         if port_vol > 0:
-            marginal_var = cov_matrix @ w / port_vol
+            marginal_var = np.einsum('ij,j->i', cov_matrix, w) / port_vol
             for i, symbol in enumerate(symbols):
                 marginal_risk[symbol] = float(marginal_var[i])
 
@@ -564,12 +564,12 @@ class CorrelationMonitor:
         weights = weights / weights.sum()
 
         for _ in range(max_iterations):
-            # Portfolio volatility
-            port_var = weights @ cov_matrix @ weights
+            # Portfolio volatility (Issue #95: einsum optimization)
+            port_var = np.einsum('i,ij,j->', weights, cov_matrix, weights)
             port_vol = np.sqrt(port_var)
 
             # Marginal risk contribution
-            marginal = cov_matrix @ weights / port_vol
+            marginal = np.einsum('ij,j->i', cov_matrix, weights) / port_vol
 
             # Risk contribution
             risk_contrib = weights * marginal

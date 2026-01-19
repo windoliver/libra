@@ -599,15 +599,16 @@ class VaRCalculator:
             [float(position_values[s] / portfolio_value) for s in symbols]
         )
 
-        # Portfolio variance
-        port_variance = weights @ cov_matrix @ weights
+        # Portfolio variance (Issue #95: einsum ~15% faster for small matrices)
+        port_variance = np.einsum('i,ij,j->', weights, cov_matrix, weights)
         port_volatility = np.sqrt(port_variance)
 
         # Z-score for confidence level
         z_score = abs(stats.norm.ppf(1 - conf))
 
         # Marginal VaR = dVaR/dw = z * Cov(r_i, r_p) / sigma_p
-        marginal_var = z_score * (cov_matrix @ weights) / port_volatility
+        # einsum for matrix-vector: 'ij,j->i'
+        marginal_var = z_score * np.einsum('ij,j->i', cov_matrix, weights) / port_volatility
 
         # Component VaR = w_i * Marginal_VaR_i * Portfolio_Value
         component_vars = {}
