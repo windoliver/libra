@@ -731,11 +731,14 @@ class VaRCalculator:
             )
         else:
             # Fallback to Python loop for parametric/monte carlo methods
+            # Pre-allocate arrays to reduce GC pressure (Issue #82)
+            n_obs = len(returns) - window
+            var_estimates = np.empty(n_obs, dtype=np.float64)
+            actual_losses = np.empty(n_obs, dtype=np.float64)
             exceptions = 0
-            var_estimates_list = []
-            actual_losses_list = []
 
             for i in range(window, len(returns)):
+                idx = i - window
                 window_returns = returns[i - window : i]
                 port_value = Decimal(str(portfolio_values[i - 1]))
 
@@ -748,15 +751,13 @@ class VaRCalculator:
                         window_returns, port_value, conf, time_horizon_days=1
                     )
 
-                var_estimates_list.append(float(var_result.var))
+                var_estimate = float(var_result.var)
+                var_estimates[idx] = var_estimate
                 actual_loss = -returns[i] * float(port_value)
-                actual_losses_list.append(actual_loss)
+                actual_losses[idx] = actual_loss
 
-                if actual_loss > float(var_result.var):
+                if actual_loss > var_estimate:
                     exceptions += 1
-
-            var_estimates = np.array(var_estimates_list)
-            actual_losses = np.array(actual_losses_list)
 
         n_observations = len(returns) - window
         exception_rate = exceptions / n_observations
@@ -785,8 +786,8 @@ class VaRCalculator:
             "kupiec_lr_statistic": lr_pof,
             "kupiec_pvalue": pof_pvalue,
             "model_adequate": pof_pvalue > 0.05,  # 5% significance
-            "var_estimates": np.array(var_estimates),
-            "actual_losses": np.array(actual_losses),
+            "var_estimates": var_estimates,  # Already np.ndarray
+            "actual_losses": actual_losses,  # Already np.ndarray
         }
 
 
