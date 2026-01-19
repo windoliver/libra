@@ -1,0 +1,47 @@
+Collecting exchange-calendars
+  Downloading exchange_calendars-4.12-py3-none-any.whl (211 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 211.2/211.2 kB 150.6 kB/s eta 0:00:00
+Collecting tzdata>=2025.2
+  Downloading tzdata-2025.3-py2.py3-none-any.whl (348 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 348.5/348.5 kB 622.4 kB/s eta 0:00:00
+Collecting pyluach>=2.3.0
+  Downloading pyluach-2.3.0-py3-none-any.whl (25 kB)
+Collecting korean_lunar_calendar>=0.3.1
+  Downloading korean_lunar_calendar-0.3.1-py3-none-any.whl (9.0 kB)
+Collecting toolz>=1.0.0
+  Downloading toolz-1.1.0-py3-none-any.whl (58 kB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 58.1/58.1 kB 1.7 MB/s eta 0:00:00
+Collecting numpy>=1.26.4
+  Downloading numpy-2.2.6-cp310-cp310-macosx_10_9_x86_64.whl (21.2 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 21.2/21.2 MB 5.0 MB/s eta 0:00:00
+Requirement already satisfied: pandas>=1.5.0 in /Users/taofeng/anaconda3/lib/python3.10/site-packages (from exchange-calendars) (1.5.3)
+Requirement already satisfied: pytz>=2020.1 in /Users/taofeng/anaconda3/lib/python3.10/site-packages (from pandas>=1.5.0->exchange-calendars) (2022.7)
+Requirement already satisfied: python-dateutil>=2.8.1 in /Users/taofeng/anaconda3/lib/python3.10/site-packages (from pandas>=1.5.0->exchange-calendars) (2.8.2)
+Requirement already satisfied: six>=1.5 in /Users/taofeng/anaconda3/lib/python3.10/site-packages (from python-dateutil>=2.8.1->pandas>=1.5.0->exchange-calendars) (1.16.0)
+Installing collected packages: korean_lunar_calendar, tzdata, toolz, pyluach, numpy, exchange-calendars
+  Attempting uninstall: tzdata
+    Found existing installation: tzdata 2023.3
+    Uninstalling tzdata-2023.3:
+      Successfully uninstalled tzdata-2023.3
+  Attempting uninstall: toolz
+    Found existing installation: toolz 0.12.0
+    Uninstalling toolz-0.12.0:
+      Successfully uninstalled toolz-0.12.0
+  Attempting uninstall: numpy
+    Found existing installation: numpy 1.26.1
+    Uninstalling numpy-1.26.1:
+      Successfully uninstalled numpy-1.26.1
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+yival 0.1.0a8 requires langchain<0.0.276,>=0.0.275, but you have langchain 0.0.329 which is incompatible.
+yival 0.1.0a8 requires numpy<2.0.0,>=1.25.2, but you have numpy 2.2.6 which is incompatible.
+yival 0.1.0a8 requires openai==0.27.10, but you have openai 1.25.1 which is incompatible.
+yival 0.1.0a8 requires pandas<3.0.0,>=2.0.3, but you have pandas 1.5.3 which is incompatible.
+yival 0.1.0a8 requires pillow==9.4.0, but you have pillow 10.4.0 which is incompatible.
+yival 0.1.0a8 requires rich<14.0.0,>=13.4.2, but you have rich 14.2.0 which is incompatible.
+streamlit 1.28.0 requires numpy<2,>=1.19.3, but you have numpy 2.2.6 which is incompatible.
+streamlit 1.28.0 requires rich<14,>=10.14.0, but you have rich 14.2.0 which is incompatible.
+numba 0.59.1 requires numpy<1.27,>=1.22, but you have numpy 2.2.6 which is incompatible.
+matplotlib 3.8.1 requires numpy<2,>=1.21, but you have numpy 2.2.6 which is incompatible.
+langchain 0.0.329 requires numpy<2,>=1, but you have numpy 2.2.6 which is incompatible.
+contourpy 1.1.1 requires numpy<2.0,>=1.16; python_version <= "3.11", but you have numpy 2.2.6 which is incompatible.
+Successfully installed exchange-calendars-4.12 korean_lunar_calendar-0.3.1 numpy-2.2.6 pyluach-2.3.0 toolz-1.1.0 tzdata-2025.3

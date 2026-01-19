@@ -84,12 +84,15 @@ from libra.tui.widgets import (
     create_demo_health_data,
     # Prediction Market Dashboard (Issue #39)
     PredictionMarketDashboard,
+    PredictionMarketDashboardData,
     create_demo_prediction_markets,
     # Whale Alerts Dashboard (Issue #38)
     WhaleAlertsDashboard,
+    WhaleAlertsDashboardData,
     create_demo_whale_alerts,
     # Funding Rate Dashboard (Issue #13)
     FundingRateDashboard,
+    FundingRateDashboardData,
     create_demo_funding_dashboard_data,
     # Risk Analytics Dashboard (Issue #15)
     RiskAnalyticsDashboard,
@@ -320,6 +323,12 @@ class LibraApp(App):
         # Cached DataTable refs for hot path (Issue #71)
         self._cached_positions_table: DataTable | None = None
         self._cached_positions_detail_table: DataTable | None = None
+
+        # Pre-allocated demo data for GC pressure reduction (Issue #94)
+        # These are mutated in-place during updates instead of re-allocating
+        self._demo_prediction_data: PredictionMarketDashboardData | None = None
+        self._demo_whale_alerts_data: WhaleAlertsDashboardData | None = None
+        self._demo_funding_data: FundingRateDashboardData | None = None
 
     # =========================================================================
     # System Commands (Command Palette)
@@ -1428,16 +1437,21 @@ class LibraApp(App):
             metrics_dashboard.update_from_collector(metrics_data)
 
     def _update_prediction_markets(self) -> None:
-        """Update prediction market dashboard with simulated price changes (Issue #39)."""
+        """Update prediction market dashboard with simulated price changes (Issue #39).
+
+        Performance optimization (Issue #94): Reuses pre-allocated data structure
+        and mutates in-place to reduce GC pressure.
+        """
         dashboard = self._cached_prediction_dashboard
         if not dashboard:
             return
 
-        # Generate updated demo data with slightly different probabilities
-        demo_data = create_demo_prediction_markets()
+        # Lazy initialization of demo data (Issue #94: object pooling)
+        if self._demo_prediction_data is None:
+            self._demo_prediction_data = create_demo_prediction_markets()
 
-        # Apply small random probability changes to simulate live market
-        for market in demo_data.markets:
+        # Mutate existing data in-place instead of allocating new objects
+        for market in self._demo_prediction_data.markets:
             # Simulate probability drift (-2% to +2%)
             delta = Decimal(str(random.uniform(-0.02, 0.02)))  # noqa: S311
             market.yes_price = max(
@@ -1450,11 +1464,14 @@ class LibraApp(App):
             volume_change = Decimal(str(random.uniform(0.95, 1.05)))  # noqa: S311
             market.volume = market.volume * volume_change
 
-        # Update dashboard
-        dashboard.update_from_data(demo_data)
+        # Update dashboard with reused data
+        dashboard.update_from_data(self._demo_prediction_data)
 
     def _update_whale_alerts(self) -> None:
-        """Update whale alerts dashboard with simulated signals (Issue #38)."""
+        """Update whale alerts dashboard with simulated signals (Issue #38).
+
+        Performance optimization (Issue #94): Reuses pre-allocated data structure.
+        """
         dashboard = self._cached_whale_alerts
         if not dashboard:
             try:
@@ -1463,14 +1480,18 @@ class LibraApp(App):
             except Exception:
                 return
 
-        # Generate fresh demo data
-        demo_data = create_demo_whale_alerts()
+        # Lazy initialization of demo data (Issue #94: object pooling)
+        if self._demo_whale_alerts_data is None:
+            self._demo_whale_alerts_data = create_demo_whale_alerts()
 
-        # Update dashboard
-        dashboard.update_data(demo_data)
+        # Update dashboard with reused data
+        dashboard.update_data(self._demo_whale_alerts_data)
 
     def _update_funding_rates(self) -> None:
-        """Update funding rate dashboard with demo data (Issue #13)."""
+        """Update funding rate dashboard with demo data (Issue #13).
+
+        Performance optimization (Issue #94): Reuses pre-allocated data structure.
+        """
         dashboard = self._cached_funding_dashboard
         if not dashboard:
             try:
@@ -1479,11 +1500,12 @@ class LibraApp(App):
             except Exception:
                 return
 
-        # Generate fresh demo data
-        demo_data = create_demo_funding_dashboard_data()
+        # Lazy initialization of demo data (Issue #94: object pooling)
+        if self._demo_funding_data is None:
+            self._demo_funding_data = create_demo_funding_dashboard_data()
 
-        # Update dashboard
-        dashboard.update_data(demo_data)
+        # Update dashboard with reused data
+        dashboard.update_data(self._demo_funding_data)
 
     # =========================================================================
     # Live Mode Event Handling
