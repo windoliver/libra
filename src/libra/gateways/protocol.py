@@ -33,6 +33,8 @@ import msgspec
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
 
+    import aiohttp
+
     from libra.core.sessions import MarketSessionManager
 
 
@@ -1137,6 +1139,8 @@ class BaseGateway(ABC):
         config: dict[str, Any] | None = None,
         session_manager: MarketSessionManager | None = None,
         max_concurrent_requests: int = 10,
+        http_pool_size: int = 100,
+        http_pool_per_host: int = 30,
     ) -> None:
         """
         Initialize gateway.
@@ -1146,6 +1150,8 @@ class BaseGateway(ABC):
             config: Configuration dict (API keys, etc.)
             session_manager: Market session manager for stock/options gateways
             max_concurrent_requests: Maximum concurrent API requests (Issue #80)
+            http_pool_size: Total HTTP connections in pool (Issue #87)
+            http_pool_per_host: HTTP connections per host (Issue #87)
         """
         self._name = name
         self._config = config or {}
@@ -1158,6 +1164,12 @@ class BaseGateway(ABC):
         self._api_semaphore = asyncio.Semaphore(max_concurrent_requests)
         self._semaphore_wait_time_total: float = 0.0  # Total time spent waiting
         self._semaphore_acquisitions: int = 0  # Number of acquisitions
+
+        # HTTP session pooling (Issue #87)
+        self._http_pool_size = http_pool_size
+        self._http_pool_per_host = http_pool_per_host
+        self._http_session: aiohttp.ClientSession | None = None
+        self._http_connector: aiohttp.TCPConnector | None = None
 
     @property
     def session_manager(self) -> MarketSessionManager | None:
@@ -1245,6 +1257,73 @@ class BaseGateway(ABC):
             yield
 
     # -------------------------------------------------------------------------
+    # HTTP Session Pooling (Issue #87)
+    # -------------------------------------------------------------------------
+
+    async def _get_http_session(self) -> aiohttp.ClientSession:
+        """
+        Get or create HTTP session with connection pooling.
+
+        Creates a shared aiohttp ClientSession with:
+        - Connection pooling (default 100 total, 30 per host)
+        - DNS caching (5 min TTL)
+        - Keepalive (60s timeout)
+        - Default request timeout (30s)
+
+        Example:
+            session = await self._get_http_session()
+            async with session.get(url) as response:
+                data = await response.json()
+
+        Returns:
+            Shared aiohttp ClientSession
+        """
+        import aiohttp
+
+        if self._http_session is None or self._http_session.closed:
+            self._http_connector = aiohttp.TCPConnector(
+                limit=self._http_pool_size,
+                limit_per_host=self._http_pool_per_host,
+                ttl_dns_cache=300,  # 5 minute DNS cache
+                keepalive_timeout=60,  # 60 second keepalive
+                enable_cleanup_closed=True,
+            )
+            self._http_session = aiohttp.ClientSession(
+                connector=self._http_connector,
+                timeout=aiohttp.ClientTimeout(total=30),
+            )
+        return self._http_session
+
+    async def _close_http_session(self) -> None:
+        """
+        Close HTTP session and connector.
+
+        Should be called during disconnect() or gateway cleanup.
+        Safe to call multiple times.
+        """
+        if self._http_session is not None and not self._http_session.closed:
+            await self._http_session.close()
+        self._http_session = None
+
+        # Connector is closed when session is closed (shared ownership)
+        self._http_connector = None
+
+    @property
+    def http_session_stats(self) -> dict[str, int | bool]:
+        """
+        Get HTTP session pool statistics.
+
+        Returns:
+            Dict with pool configuration and state
+        """
+        return {
+            "pool_size": self._http_pool_size,
+            "pool_per_host": self._http_pool_per_host,
+            "session_active": self._http_session is not None
+            and not self._http_session.closed,
+        }
+
+    # -------------------------------------------------------------------------
     # Context Manager Support
     # -------------------------------------------------------------------------
 
@@ -1256,6 +1335,7 @@ class BaseGateway(ABC):
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit."""
         await self.disconnect()
+        await self._close_http_session()
 
     # -------------------------------------------------------------------------
     # Abstract Methods (must be implemented by subclasses)

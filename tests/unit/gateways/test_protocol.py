@@ -735,3 +735,107 @@ class TestAPISemaphore:
         # First call has ~0 wait, but 2nd and 3rd should have wait time
         # Total wait should be measurable but exact value depends on timing
         assert stats["total_wait_time"] >= 0.0
+
+
+# =============================================================================
+# HTTP Session Pooling Tests (Issue #87)
+# =============================================================================
+
+
+class TestHTTPSessionPooling:
+    """Tests for HTTP session pooling."""
+
+    def test_default_http_pool_config(self) -> None:
+        """Test default HTTP pool configuration."""
+        gateway = PaperGateway()
+
+        assert gateway._http_pool_size == 100
+        assert gateway._http_pool_per_host == 30
+        assert gateway._http_session is None
+        assert gateway._http_connector is None
+
+    def test_custom_http_pool_config(self) -> None:
+        """Test custom HTTP pool configuration."""
+        gateway = PaperGateway(http_pool_size=50, http_pool_per_host=10)
+
+        assert gateway._http_pool_size == 50
+        assert gateway._http_pool_per_host == 10
+
+    def test_http_session_stats_initial(self) -> None:
+        """Test HTTP session stats before session is created."""
+        gateway = PaperGateway()
+
+        stats = gateway.http_session_stats
+
+        assert stats["pool_size"] == 100
+        assert stats["pool_per_host"] == 30
+        assert stats["session_active"] is False
+
+    @pytest.mark.asyncio
+    async def test_get_http_session_creates_session(self) -> None:
+        """Test that _get_http_session creates a session."""
+        gateway = PaperGateway()
+
+        session = await gateway._get_http_session()
+
+        assert session is not None
+        assert not session.closed
+        assert gateway.http_session_stats["session_active"] is True
+
+        # Cleanup
+        await gateway._close_http_session()
+
+    @pytest.mark.asyncio
+    async def test_get_http_session_reuses_session(self) -> None:
+        """Test that _get_http_session reuses existing session."""
+        gateway = PaperGateway()
+
+        session1 = await gateway._get_http_session()
+        session2 = await gateway._get_http_session()
+
+        assert session1 is session2
+
+        # Cleanup
+        await gateway._close_http_session()
+
+    @pytest.mark.asyncio
+    async def test_close_http_session(self) -> None:
+        """Test HTTP session cleanup."""
+        gateway = PaperGateway()
+
+        # Create session
+        await gateway._get_http_session()
+        assert gateway.http_session_stats["session_active"] is True
+
+        # Close session
+        await gateway._close_http_session()
+
+        assert gateway._http_session is None
+        assert gateway._http_connector is None
+        assert gateway.http_session_stats["session_active"] is False
+
+    @pytest.mark.asyncio
+    async def test_close_http_session_idempotent(self) -> None:
+        """Test that closing session multiple times is safe."""
+        gateway = PaperGateway()
+
+        # Create and close
+        await gateway._get_http_session()
+        await gateway._close_http_session()
+
+        # Should not raise
+        await gateway._close_http_session()
+        await gateway._close_http_session()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_closes_session(self) -> None:
+        """Test that context manager closes HTTP session."""
+        gateway = PaperGateway()
+
+        async with gateway:
+            # Create session during use
+            await gateway._get_http_session()
+            assert gateway.http_session_stats["session_active"] is True
+
+        # Session should be closed after exit
+        assert gateway.http_session_stats["session_active"] is False

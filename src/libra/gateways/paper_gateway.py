@@ -184,6 +184,7 @@ class PaperGateway(BaseGateway):
     def __init__(
         self,
         config: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> None:
         """
         Initialize paper trading gateway.
@@ -195,8 +196,9 @@ class PaperGateway(BaseGateway):
                 - slippage_bps: Basis points for fixed model
                 - maker_fee_bps: Maker fee in basis points
                 - taker_fee_bps: Taker fee in basis points
+            **kwargs: Additional arguments passed to BaseGateway
         """
-        super().__init__(name="paper", config=config)
+        super().__init__(name="paper", config=config, **kwargs)
 
         # Parse config
         cfg = config or {}
