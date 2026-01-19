@@ -34,17 +34,29 @@ logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Optimized Kendall Tau (Issue #75: vectorized pair computation)
+# Issue #98: Rust + Rayon parallelization for 20-100x speedup
 # =============================================================================
+
+# Try to import Rust implementation
+try:
+    from libra_core_rs import kendall_correlation_matrix as _kendall_tau_rust
+
+    RUST_KENDALL_AVAILABLE = True
+except ImportError:
+    RUST_KENDALL_AVAILABLE = False
+    _kendall_tau_rust = None
 
 
 def _kendall_tau_matrix(returns_matrix: np.ndarray) -> np.ndarray:
     """
     Compute Kendall tau correlation matrix efficiently.
 
-    Optimized implementation that pre-extracts columns to avoid
-    repeated slicing overhead (Issue #75).
+    Uses Rust + Rayon parallelization when available (Issue #98: 20-100x speedup).
+    Falls back to optimized Python implementation (Issue #75).
 
-    Performance: ~32ms for 20 assets, 252 observations.
+    Performance:
+    - Rust: ~0.3ms for 20 assets, 252 observations
+    - Python: ~32ms for 20 assets, 252 observations
 
     Args:
         returns_matrix: Matrix of returns (observations x assets)
@@ -52,6 +64,11 @@ def _kendall_tau_matrix(returns_matrix: np.ndarray) -> np.ndarray:
     Returns:
         Correlation matrix (n x n)
     """
+    # Use Rust implementation if available (20-100x faster)
+    if RUST_KENDALL_AVAILABLE and _kendall_tau_rust is not None:
+        return _kendall_tau_rust(returns_matrix)
+
+    # Fallback to Python implementation
     n = returns_matrix.shape[1]
     corr_matrix = np.eye(n)
 

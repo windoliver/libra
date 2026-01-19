@@ -46,6 +46,7 @@ try:
         ewma_volatility,
         ewma_volatility_scalar,
         historical_var,
+        kendall_correlation_matrix,
         MessageBus,
         parametric_var,
     )
@@ -60,6 +61,7 @@ try:
         # Correlation functions
         "correlation_matrix",
         "covariance_matrix",
+        "kendall_correlation_matrix",
         # VaR functions
         "parametric_var",
         "historical_var",

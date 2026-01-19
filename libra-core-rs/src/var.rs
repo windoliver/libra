@@ -209,7 +209,7 @@ mod tests {
         let mut sorted: Vec<f64> = returns.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        let percentile = 0.05;
+        let percentile: f64 = 0.05;
         let index = (percentile * 21.0).floor() as usize;
         let expected_return = -sorted[index];
 

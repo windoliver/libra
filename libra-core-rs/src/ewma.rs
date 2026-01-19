@@ -225,10 +225,10 @@ mod tests {
     #[test]
     fn test_ewma_volatility_basic() {
         // Test with constant returns
-        let returns = vec![0.01; 10];
-        let lambda = 1.0 - 2.0 / 21.0; // span=20
+        let returns = vec![0.01_f64; 10];
+        let lambda: f64 = 1.0 - 2.0 / 21.0; // span=20
 
-        let mut variance = 0.01 * 0.01;
+        let mut variance: f64 = 0.01 * 0.01;
         let mut expected = vec![variance.sqrt()];
 
         for _ in 1..10 {
