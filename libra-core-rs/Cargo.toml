@@ -1,0 +1,53 @@
+[package]
+name = "libra-core-rs"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance Rust core for LIBRA trading platform"
+license = "MIT"
+repository = "https://github.com/windoliver/libra"
+keywords = ["trading", "finance", "performance", "python"]
+categories = ["science", "mathematics"]
+
+[lib]
+name = "libra_core_rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# PyO3 for Python bindings
+pyo3 = { version = "0.22", features = ["extension-module"] }
+
+# NumPy interop
+numpy = "0.22"
+
+# N-dimensional arrays
+ndarray = "0.16"
+
+# Parallel iteration
+rayon = "1.10"
+
+# Fast floating point math
+num-traits = "0.2"
+
+# SIMD operations (optional)
+packed_simd_2 = { version = "0.3", optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+approx = "0.5"
+
+[features]
+default = []
+simd = ["packed_simd_2"]
+
+[[bench]]
+name = "ewma_benchmark"
+harness = false
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+
+[profile.bench]
+lto = true
+codegen-units = 1

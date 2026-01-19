@@ -250,3 +250,46 @@ jobs:
           name: dist
           path: dist/
           retention-days: 7
+
+  # ===========================================================================
+  # Rust Core Library (Issue #96)
+  # ===========================================================================
+  rust:
+    name: Rust Core (libra-core-rs)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            libra-core-rs/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('libra-core-rs/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        working-directory: libra-core-rs
+        run: cargo fmt --check
+
+      - name: Clippy lints
+        working-directory: libra-core-rs
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        working-directory: libra-core-rs
+        run: cargo test --release
+
+      - name: Build release
+        working-directory: libra-core-rs
+        run: cargo build --release
