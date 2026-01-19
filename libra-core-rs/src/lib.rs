@@ -39,6 +39,8 @@ fn libra_core_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // EWMA functions
     m.add_function(wrap_pyfunction!(ewma::ewma_volatility, m)?)?;
     m.add_function(wrap_pyfunction!(ewma::ewma_mean, m)?)?;
+    m.add_function(wrap_pyfunction!(ewma::ewma_volatility_scalar, m)?)?;
+    m.add_function(wrap_pyfunction!(ewma::ewma_covariance, m)?)?;
 
     // Correlation functions
     m.add_function(wrap_pyfunction!(correlation::correlation_matrix, m)?)?;

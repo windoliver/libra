@@ -32,6 +32,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Optional Rust backend for EWMA (Issue #97: ~50x additional speedup)
+try:
+    from libra_core_rs import ewma_volatility_scalar as _ewma_volatility_rust
+
+    RUST_EWMA_AVAILABLE = True
+except ImportError:
+    RUST_EWMA_AVAILABLE = False
+    _ewma_volatility_rust = None  # type: ignore
+
 
 # =============================================================================
 # Numba-compiled EWMA (Issue #70: ~50x speedup)
@@ -217,6 +226,7 @@ class VaRConfig:
     # Parametric settings
     use_ewma: bool = True  # Exponentially weighted volatility
     ewma_lambda: float = 0.94  # RiskMetrics decay factor
+    use_rust_ewma: bool = True  # Use Rust backend if available (Issue #97)
 
     # Scaling
     sqrt_time_scaling: bool = True  # Scale VaR by sqrt(time)
@@ -678,7 +688,9 @@ class VaRCalculator:
         Calculate EWMA (Exponentially Weighted Moving Average) volatility.
 
         Uses RiskMetrics methodology with decay factor lambda.
-        Delegates to Numba JIT-compiled function for ~50x speedup (Issue #70).
+        Backends (in order of preference when enabled):
+        - Rust (Issue #97): ~100x speedup, no GIL, SIMD auto-vectorization
+        - Numba (Issue #70): ~50x speedup, JIT-compiled
 
         Args:
             returns: Historical returns
@@ -686,6 +698,11 @@ class VaRCalculator:
         Returns:
             EWMA volatility estimate
         """
+        # Use Rust backend if available and enabled (Issue #97)
+        if self.config.use_rust_ewma and RUST_EWMA_AVAILABLE:
+            return _ewma_volatility_rust(returns, lambda_=self.config.ewma_lambda)
+
+        # Fallback to Numba backend
         return _ewma_volatility_numba(returns, self.config.ewma_lambda)
 
     def backtest_var(

@@ -41,8 +41,10 @@ try:
         __version__,
         correlation_matrix,
         covariance_matrix,
+        ewma_covariance,
         ewma_mean,
         ewma_volatility,
+        ewma_volatility_scalar,
         historical_var,
         MessageBus,
         parametric_var,
@@ -52,7 +54,9 @@ try:
         "__version__",
         # EWMA functions
         "ewma_volatility",
+        "ewma_volatility_scalar",
         "ewma_mean",
+        "ewma_covariance",
         # Correlation functions
         "correlation_matrix",
         "covariance_matrix",
