@@ -74,10 +74,33 @@ from libra.backtest.engine import (
     BacktestConfig,
     BacktestEngine,
 )
+from libra.backtest.factors import (
+    BollingerBandFactor,
+    Factor,
+    FactorMeta,
+    LogReturnsFactor,
+    MeanReversionFactor,
+    MomentumFactor,
+    RankFactor,
+    ReturnsFactor,
+    RSIFactor,
+    VolatilityFactor,
+    VWAPDeviationFactor,
+    get_factor,
+    list_factors,
+    register_factor,
+)
 from libra.backtest.gateway import BacktestGateway
 from libra.backtest.metrics import (
     MetricsCollector,
     TradeRecord,
+)
+from libra.backtest.pipeline import (
+    Pipeline,
+    PipelineConfig,
+    PipelineResult,
+    compute_factor,
+    run_factors,
 )
 from libra.backtest.result import (
     BacktestResult,
@@ -97,4 +120,25 @@ __all__ = [
     # Result
     "BacktestResult",
     "BacktestSummary",
+    # Factors (Issue #93)
+    "Factor",
+    "FactorMeta",
+    "MomentumFactor",
+    "MeanReversionFactor",
+    "VolatilityFactor",
+    "RSIFactor",
+    "BollingerBandFactor",
+    "VWAPDeviationFactor",
+    "ReturnsFactor",
+    "LogReturnsFactor",
+    "RankFactor",
+    "get_factor",
+    "list_factors",
+    "register_factor",
+    # Pipeline (Issue #93)
+    "Pipeline",
+    "PipelineConfig",
+    "PipelineResult",
+    "compute_factor",
+    "run_factors",
 ]
