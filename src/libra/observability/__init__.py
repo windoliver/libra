@@ -6,6 +6,7 @@ Provides:
 - Metrics collection (counters, gauges, histograms)
 - Event recording and replay
 - Health monitoring
+- Memory profiling with tracemalloc
 - Prometheus/OpenTelemetry export
 
 See: https://github.com/windoliver/libra/issues/25
@@ -31,6 +32,13 @@ from libra.observability.health import (
     check_memory,
     get_monitor,
     set_monitor,
+)
+from libra.observability.memory import (
+    MemoryDiff,
+    MemoryMonitor,
+    MemorySnapshot,
+    get_memory_monitor,
+    set_memory_monitor,
 )
 from libra.observability.recorder import (
     EventRecorder,
@@ -91,4 +99,10 @@ __all__ = [
     "check_memory",
     "get_monitor",
     "set_monitor",
+    # Memory (Issue #92)
+    "MemoryDiff",
+    "MemoryMonitor",
+    "MemorySnapshot",
+    "get_memory_monitor",
+    "set_memory_monitor",
 ]
