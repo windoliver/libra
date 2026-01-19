@@ -19,8 +19,10 @@ Performance:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -29,7 +31,7 @@ import msgspec
 
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from libra.core.sessions import MarketSessionManager
 
@@ -1134,6 +1136,7 @@ class BaseGateway(ABC):
         name: str,
         config: dict[str, Any] | None = None,
         session_manager: MarketSessionManager | None = None,
+        max_concurrent_requests: int = 10,
     ) -> None:
         """
         Initialize gateway.
@@ -1142,12 +1145,19 @@ class BaseGateway(ABC):
             name: Gateway identifier
             config: Configuration dict (API keys, etc.)
             session_manager: Market session manager for stock/options gateways
+            max_concurrent_requests: Maximum concurrent API requests (Issue #80)
         """
         self._name = name
         self._config = config or {}
         self._connected = False
         self._subscribed_symbols: set[str] = set()
         self._session_manager = session_manager
+
+        # API concurrency control (Issue #80)
+        self._max_concurrent_requests = max_concurrent_requests
+        self._api_semaphore = asyncio.Semaphore(max_concurrent_requests)
+        self._semaphore_wait_time_total: float = 0.0  # Total time spent waiting
+        self._semaphore_acquisitions: int = 0  # Number of acquisitions
 
     @property
     def session_manager(self) -> MarketSessionManager | None:
@@ -1186,6 +1196,53 @@ class BaseGateway(ABC):
     def subscribed_symbols(self) -> set[str]:
         """Currently subscribed symbols."""
         return self._subscribed_symbols.copy()
+
+    # -------------------------------------------------------------------------
+    # API Concurrency Control (Issue #80)
+    # -------------------------------------------------------------------------
+
+    @property
+    def api_semaphore_stats(self) -> dict[str, float | int]:
+        """
+        Get API semaphore statistics for monitoring.
+
+        Returns:
+            Dict with:
+            - max_concurrent: Maximum allowed concurrent requests
+            - total_wait_time: Total seconds spent waiting for semaphore
+            - acquisitions: Number of semaphore acquisitions
+            - avg_wait_time: Average wait time per acquisition
+        """
+        avg_wait = (
+            self._semaphore_wait_time_total / self._semaphore_acquisitions
+            if self._semaphore_acquisitions > 0
+            else 0.0
+        )
+        return {
+            "max_concurrent": self._max_concurrent_requests,
+            "total_wait_time": self._semaphore_wait_time_total,
+            "acquisitions": self._semaphore_acquisitions,
+            "avg_wait_time": avg_wait,
+        }
+
+    @asynccontextmanager
+    async def _api_call(self) -> AsyncGenerator[None, None]:
+        """
+        Context manager for API calls with semaphore and metrics.
+
+        Use this to wrap all API calls to enforce concurrency limits
+        and track wait times.
+
+        Example:
+            async with self._api_call():
+                return await self._exchange.create_order(...)
+        """
+        start = time.monotonic()
+        async with self._api_semaphore:
+            wait_time = time.monotonic() - start
+            self._semaphore_wait_time_total += wait_time
+            self._semaphore_acquisitions += 1
+            yield
 
     # -------------------------------------------------------------------------
     # Context Manager Support
