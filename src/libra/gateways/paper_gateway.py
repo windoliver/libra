@@ -226,6 +226,7 @@ class PaperGateway(BaseGateway):
         self._prices: dict[str, tuple[Decimal, Decimal]] = {}  # symbol -> (bid, ask)
         self._tick_queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=1000)
         self._order_counter = 0
+        self._dropped_ticks = 0  # Counter for backpressure monitoring (Issue #79)
 
         # Price feed gateway (optional)
         self._price_feed: BaseGateway | None = None
@@ -238,6 +239,15 @@ class PaperGateway(BaseGateway):
     def capabilities(self) -> GatewayCapabilities:
         """Get gateway capabilities."""
         return PAPER_GATEWAY_CAPABILITIES
+
+    @property
+    def dropped_ticks(self) -> int:
+        """
+        Get count of dropped ticks due to backpressure (Issue #79).
+
+        Use this metric to monitor queue health and detect backpressure events.
+        """
+        return self._dropped_ticks
 
     # -------------------------------------------------------------------------
     # Connection Management
@@ -284,9 +294,17 @@ class PaperGateway(BaseGateway):
         try:
             self._tick_queue.put_nowait(tick)
         except asyncio.QueueFull:
+            # Queue is full - drop oldest tick and log (Issue #79)
+            self._dropped_ticks += 1
+            logger.warning(
+                "Tick dropped due to backpressure: %s @ %s (total dropped: %d)",
+                tick.symbol,
+                tick.timestamp_ns,
+                self._dropped_ticks,
+            )
             try:
-                self._tick_queue.get_nowait()
-                self._tick_queue.put_nowait(tick)
+                self._tick_queue.get_nowait()  # Remove oldest
+                self._tick_queue.put_nowait(tick)  # Add newest
             except asyncio.QueueEmpty:
                 pass
 

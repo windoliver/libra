@@ -602,3 +602,47 @@ class TestPaperGatewayUtilities:
         assert len(history) == 3
         assert all("price" in trade for trade in history)
         assert all("amount" in trade for trade in history)
+
+
+class TestBackpressureHandling:
+    """Tests for tick queue backpressure handling (Issue #79)."""
+
+    @pytest.mark.asyncio
+    async def test_dropped_ticks_counter_initial(self) -> None:
+        """Test dropped ticks counter starts at zero."""
+        gateway = PaperGateway()
+        await gateway.connect()
+
+        assert gateway.dropped_ticks == 0
+
+    @pytest.mark.asyncio
+    async def test_dropped_ticks_on_queue_full(self) -> None:
+        """Test dropped ticks counter increments when queue is full."""
+        # Create gateway with very small queue for testing
+        gateway = PaperGateway()
+        await gateway.connect()
+        gateway._tick_queue._maxsize = 2  # Override queue size for test
+
+        # Fill the queue
+        gateway.update_price("BTC/USDT", Decimal("50000"), Decimal("50010"))
+        gateway.update_price("BTC/USDT", Decimal("50001"), Decimal("50011"))
+
+        # This should trigger backpressure (queue full)
+        gateway.update_price("BTC/USDT", Decimal("50002"), Decimal("50012"))
+
+        # Should have dropped one tick
+        assert gateway.dropped_ticks == 1
+
+    @pytest.mark.asyncio
+    async def test_dropped_ticks_accumulates(self) -> None:
+        """Test dropped ticks counter accumulates over time."""
+        gateway = PaperGateway()
+        await gateway.connect()
+        gateway._tick_queue._maxsize = 1  # Very small queue
+
+        # Multiple updates that will cause drops
+        for i in range(5):
+            gateway.update_price("BTC/USDT", Decimal(50000 + i), Decimal(50010 + i))
+
+        # Should have dropped 4 ticks (first goes in, rest trigger backpressure)
+        assert gateway.dropped_ticks == 4
