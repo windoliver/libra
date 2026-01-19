@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import logging
 import time
 from dataclasses import dataclass, field
@@ -118,6 +119,10 @@ class KernelConfig:
     # Plugin discovery (Issue #29)
     discover_plugins: bool = True  # Discover registered plugins at startup
     log_plugins: bool = True  # Log discovered plugins
+
+    # GC optimization (Issue #83)
+    gc_freeze: bool = True  # Freeze long-lived objects after startup
+    gc_threshold: tuple[int, int, int] | None = None  # Custom GC thresholds (gen0, gen1, gen2)
 
     def __post_init__(self) -> None:
         """Validate configuration."""
@@ -728,6 +733,39 @@ class TradingKernel:
 
             logger.debug("Starting strategy: %s", strategy.name)
             await strategy.start()
+
+        # 8. GC optimization for long-lived objects (Issue #83)
+        self._optimize_gc()
+
+    def _optimize_gc(self) -> None:
+        """
+        Optimize garbage collection for trading workloads (Issue #83).
+
+        After startup, many objects are long-lived (configs, caches, strategies).
+        gc.freeze() excludes these from GC scanning, reducing pause times.
+        """
+        if self._config.gc_freeze:
+            # Collect any garbage from startup
+            gc.collect()
+
+            # Freeze all current objects - they won't be scanned in future GC cycles
+            gc.freeze()
+
+            frozen_count = gc.get_freeze_count()
+            logger.info(
+                "GC optimized: frozen %d long-lived objects",
+                frozen_count,
+            )
+
+        # Optionally tune GC thresholds for trading workloads
+        if self._config.gc_threshold is not None:
+            old_threshold = gc.get_threshold()
+            gc.set_threshold(*self._config.gc_threshold)
+            logger.info(
+                "GC thresholds updated: %s -> %s",
+                old_threshold,
+                self._config.gc_threshold,
+            )
 
     async def _load_actor_state(self, actor: BaseActor) -> None:
         """Load saved state for an actor."""
