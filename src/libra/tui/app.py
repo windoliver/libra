@@ -36,6 +36,7 @@ LITE_MODE = os.environ.get("LIBRA_LITE_MODE", "0") == "1"
 from textual import work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
+from textual.reactive import reactive
 from textual.containers import Container, Horizontal, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
@@ -267,6 +268,13 @@ class LibraApp(App):
         Binding("9", "switch_tab('settings')", show=False, id="tab.9"),
     ]
 
+    # Reactive properties for automatic update batching (Issue #88)
+    # Textual batches reactive updates automatically, reducing redundant redraws
+    btc_price: reactive[Decimal] = reactive(Decimal("51250.00"))
+    eth_price: reactive[Decimal] = reactive(Decimal("3045.00"))
+    sol_price: reactive[Decimal] = reactive(Decimal("142.50"))
+    total_pnl: reactive[Decimal] = reactive(Decimal("347.50"))
+
     def __init__(
         self,
         bus: MessageBus | None = None,
@@ -288,11 +296,7 @@ class LibraApp(App):
         self._demo_execution_client: DemoExecutionClient | None = None
         self._execution_engine = None  # Lazy import to avoid circular deps
 
-        # Legacy price references (for backward compatibility)
-        self._btc_price = Decimal("51250.00")
-        self._eth_price = Decimal("3045.00")
-        self._sol_price = Decimal("142.50")
-        self._total_pnl = Decimal("347.50")
+        # Tick counter for timer logic
         self._tick_count = 0
 
         # Alert throttling (prevent alarm fatigue)
@@ -534,6 +538,16 @@ class LibraApp(App):
     def _get_prediction_dashboard(self) -> PredictionMarketDashboard | None:
         """Get cached PredictionMarketDashboard reference."""
         return self._cached_prediction_dashboard
+
+    # =========================================================================
+    # Reactive Property Watchers (Issue #88)
+    # =========================================================================
+
+    def watch_total_pnl(self, new_pnl: Decimal) -> None:
+        """Called automatically when total_pnl changes (Textual batches updates)."""
+        pnl_display = self._cached_pnl_display
+        if pnl_display:
+            pnl_display.update_pnl(new_pnl)
 
     def _load_user_keymap(self) -> None:
         """Load user-configurable keymaps from config file."""
@@ -874,9 +888,9 @@ class LibraApp(App):
         """Open the order entry modal (o key)."""
         symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
         current_prices = {
-            "BTC/USDT": self._btc_price,
-            "ETH/USDT": self._eth_price,
-            "SOL/USDT": self._sol_price,
+            "BTC/USDT": self.btc_price,
+            "ETH/USDT": self.eth_price,
+            "SOL/USDT": self.sol_price,
         }
 
         def handle_order_result(result: OrderEntryResult | None) -> None:
@@ -1146,9 +1160,9 @@ class LibraApp(App):
     def _add_position_rows(self, table: DataTable) -> None:
         """Add position rows with CVD-friendly icons."""
         positions = [
-            ("BTC/USDT", "LONG", "0.1000", Decimal("50000"), self._btc_price, Decimal("0.1")),
-            ("ETH/USDT", "SHORT", "2.0000", Decimal("3000"), self._eth_price, Decimal("2.0")),
-            ("SOL/USDT", "LONG", "10.000", Decimal("135"), self._sol_price, Decimal("10.0")),
+            ("BTC/USDT", "LONG", "0.1000", Decimal("50000"), self.btc_price, Decimal("0.1")),
+            ("ETH/USDT", "SHORT", "2.0000", Decimal("3000"), self.eth_price, Decimal("2.0")),
+            ("SOL/USDT", "LONG", "10.000", Decimal("135"), self.sol_price, Decimal("10.0")),
         ]
 
         total_pnl = Decimal("0")
@@ -1180,7 +1194,7 @@ class LibraApp(App):
                 f"[{pnl_color}]{pnl_sign}{pnl_pct:.2f}%[/{pnl_color}]",
             )
 
-        self._total_pnl = total_pnl
+        self.total_pnl = total_pnl
 
     # =========================================================================
     # Demo Trading Integration
@@ -1234,17 +1248,13 @@ class LibraApp(App):
 
         # Only update prices and P&L (minimal updates)
         price_updates = self.demo_trader.tick_prices()
-        self._btc_price = price_updates.get("BTC/USDT", self._btc_price)
-        self._eth_price = price_updates.get("ETH/USDT", self._eth_price)
-        self._sol_price = price_updates.get("SOL/USDT", self._sol_price)
+        self.btc_price = price_updates.get("BTC/USDT", self.btc_price)
+        self.eth_price = price_updates.get("ETH/USDT", self.eth_price)
+        self.sol_price = price_updates.get("SOL/USDT", self.sol_price)
 
         stats = self.demo_trader.get_stats()
-        self._total_pnl = stats["realized_pnl"] + stats["unrealized_pnl"]
-
-        # Update P&L display only
-        pnl_display = self._cached_pnl_display
-        if pnl_display:
-            pnl_display.update_pnl(self._total_pnl)
+        self.total_pnl = stats["realized_pnl"] + stats["unrealized_pnl"]
+        # Note: watch_total_pnl() automatically updates PnLDisplay (Issue #88)
 
     def _consolidated_tick(self) -> None:
         """
@@ -1316,26 +1326,22 @@ class LibraApp(App):
         # Update prices via demo trader
         price_updates = self.demo_trader.tick_prices()
 
-        # Sync to legacy price vars for compatibility
-        self._btc_price = price_updates.get("BTC/USDT", self._btc_price)
-        self._eth_price = price_updates.get("ETH/USDT", self._eth_price)
-        self._sol_price = price_updates.get("SOL/USDT", self._sol_price)
+        # Update reactive price properties (Textual auto-batches updates)
+        self.btc_price = price_updates.get("BTC/USDT", self.btc_price)
+        self.eth_price = price_updates.get("ETH/USDT", self.eth_price)
+        self.sol_price = price_updates.get("SOL/USDT", self.sol_price)
 
         # Log price tick occasionally (every 4 seconds)
         if self._tick_count % 4 == 0:
             log = self._cached_log_viewer
             if log:
-                symbols = [("BTC", self._btc_price), ("ETH", self._eth_price), ("SOL", self._sol_price)]
+                symbols = [("BTC", self.btc_price), ("ETH", self.eth_price), ("SOL", self.sol_price)]
                 sym, price = symbols[self._tick_count % 3]
                 log.log_message(f"TICK {sym}/USDT @ ${price:,.2f}", "debug")
 
-        # Update P&L display using cached reference
+        # Update P&L via reactive property (watch_total_pnl auto-updates widget)
         stats = self.demo_trader.get_stats()
-        self._total_pnl = stats["realized_pnl"] + stats["unrealized_pnl"]
-
-        pnl_display = self._cached_pnl_display
-        if pnl_display:
-            pnl_display.update_pnl(self._total_pnl)
+        self.total_pnl = stats["realized_pnl"] + stats["unrealized_pnl"]
 
     def _maybe_auto_trade(self) -> None:
         """Occasionally execute auto trades for demo."""
@@ -1601,12 +1607,12 @@ class LibraApp(App):
         log.log_message(f"  Connected: {'Yes' if status.connected else 'No'}", "info")
         log.log_message(f"  Mode:      {'DEMO' if self.demo_mode else 'LIVE'}", "warning")
         if self.demo_mode:
-            pnl_icon = ICON_UP if self._total_pnl > 0 else ICON_DOWN
-            log.log_message(f"  BTC:       ${self._btc_price:,.2f}", "info")
-            log.log_message(f"  ETH:       ${self._eth_price:,.2f}", "info")
+            pnl_icon = ICON_UP if self.total_pnl > 0 else ICON_DOWN
+            log.log_message(f"  BTC:       ${self.btc_price:,.2f}", "info")
+            log.log_message(f"  ETH:       ${self.eth_price:,.2f}", "info")
             log.log_message(
-                f"  P&L:       {pnl_icon} ${self._total_pnl:+,.2f}",
-                "success" if self._total_pnl > 0 else "error"
+                f"  P&L:       {pnl_icon} ${self.total_pnl:+,.2f}",
+                "success" if self.total_pnl > 0 else "error"
             )
         log.log_message("─" * 40, "debug")
 
