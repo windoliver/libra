@@ -64,6 +64,9 @@ dev = [
     "pytest-benchmark>=4.0",
     "pytest-cov>=4.0",
     "pytest-xdist>=3.5",   # Parallel test execution
+    # Memory profiling (Issue #91)
+    "memray>=1.12; sys_platform == 'linux'",        # Bloomberg's memory profiler (Linux only)
+    "pytest-memray>=1.6; sys_platform == 'linux'",  # pytest plugin for memray
     # Benchmarking
     "hdrhistogram>=0.10",  # High-precision latency histograms
     # Linting & Formatting

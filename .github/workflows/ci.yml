@@ -129,6 +129,59 @@ jobs:
             || echo "Free-threaded tests completed (some failures expected)"
 
   # ===========================================================================
+  # Memory Profiling (Issue #91)
+  # ===========================================================================
+  memory-check:
+    name: Memory Profile
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install memray  # Ensure memray is installed
+
+      - name: Run memory benchmark with memray
+        run: |
+          python -m memray run -o profile.bin scripts/benchmark_memory.py
+
+      - name: Generate memory stats
+        run: |
+          python -m memray stats profile.bin --json > memory-stats.json
+          python -m memray stats profile.bin
+
+      - name: Check memory growth
+        run: |
+          python scripts/check_memory_growth.py memory-stats.json \
+            --peak-mb 500 \
+            --max-allocations 10000000
+
+      - name: Generate flamegraph
+        if: always()
+        run: |
+          python -m memray flamegraph profile.bin -o flamegraph.html
+
+      - name: Upload memory artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-profile
+          path: |
+            profile.bin
+            memory-stats.json
+            flamegraph.html
+          retention-days: 30
+
+  # ===========================================================================
   # Benchmarks (Main branch only)
   # ===========================================================================
   benchmark:
