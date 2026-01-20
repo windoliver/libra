@@ -38,6 +38,7 @@ from libra.core.state_store import (
     StateVerificationError,
     compute_state_hash,
 )
+from libra.execution.reconciliation import OrderReconciler, ReconciliationResult
 from libra.plugins.loader import (
     discover_gateways,
     discover_strategies,
@@ -114,6 +115,10 @@ class KernelConfig:
     save_state: bool = True
     state_dir: str = ".libra_state"  # Directory for state files
     fail_fast_on_inconsistency: bool = True  # Terminate on state inconsistency
+
+    # Reconciliation (Issue #109)
+    reconcile_on_startup: bool = False  # Reconcile orders/positions with venue on startup
+    fail_on_reconciliation_error: bool = False  # Fail startup if reconciliation fails
 
     # Component configs
     bus_config: MessageBusConfig = field(default_factory=MessageBusConfig)
@@ -224,6 +229,9 @@ class TradingKernel:
         self._state_store: StateStore = FileStateStore(self._config.state_dir)
         self._last_checkpoint: KernelCheckpoint | None = None
 
+        # Reconciliation result (Issue #109)
+        self._last_reconciliation: ReconciliationResult | None = None
+
         # Optional components (set by user)
         self._gateway: Gateway | None = None
         self._risk_manager: RiskManager | None = None  # Legacy
@@ -328,6 +336,11 @@ class TradingKernel:
     def state_store(self) -> StateStore:
         """State store for crash recovery."""
         return self._state_store
+
+    @property
+    def last_reconciliation(self) -> ReconciliationResult | None:
+        """Result from the last reconciliation (Issue #109)."""
+        return self._last_reconciliation
 
     # =========================================================================
     # Timestamps
@@ -755,6 +768,10 @@ class TradingKernel:
             logger.debug("Connecting ExecutionClient: %s", self._execution_client.name)
             await self._execution_client.connect()
 
+        # 5d. Reconcile orders/positions with venue (Issue #109)
+        if self._config.reconcile_on_startup and self._execution_client is not None:
+            await self._reconcile_with_venue()
+
         # 6. Initialize and start Actors
         for actor in self._actors:
             logger.debug("Initializing actor: %s", actor.name)
@@ -876,6 +893,54 @@ class TradingKernel:
         # Actor-specific state loading would go here
         # For now, state is recovered at kernel level via _recover_state
         pass
+
+    async def _reconcile_with_venue(self) -> None:
+        """
+        Reconcile local state with venue state (Issue #109).
+
+        Called during startup to ensure orders and positions are in sync.
+        """
+        if self._execution_client is None:
+            logger.warning("Cannot reconcile: no execution client configured")
+            return
+
+        logger.info("Starting reconciliation with venue...")
+
+        reconciler = OrderReconciler(
+            execution_client=self._execution_client,
+            cache=self._cache,
+            risk_engine=self._risk_engine,
+        )
+
+        try:
+            result = await reconciler.reconcile()
+            self._last_reconciliation = result
+
+            if result.success:
+                if result.had_changes:
+                    logger.warning(
+                        "Reconciliation completed with discrepancies: %s",
+                        result.summary(),
+                    )
+                    for discrepancy in result.discrepancies:
+                        logger.info(
+                            "  %s %s: %s",
+                            discrepancy.action.value,
+                            discrepancy.entity_type,
+                            discrepancy.details,
+                        )
+                else:
+                    logger.info("Reconciliation completed: state is consistent")
+            else:
+                error_msg = f"Reconciliation failed: {result.errors}"
+                logger.error(error_msg)
+                if self._config.fail_on_reconciliation_error:
+                    raise RuntimeError(error_msg)
+
+        except Exception as e:
+            logger.exception("Reconciliation error")
+            if self._config.fail_on_reconciliation_error:
+                raise RuntimeError(f"Reconciliation failed: {e}") from e
 
     # =========================================================================
     # Shutdown

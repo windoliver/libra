@@ -114,6 +114,14 @@ from libra.execution.pov import (
     create_pov,
 )
 
+# Reconciliation (Issue #109)
+from libra.execution.reconciliation import (
+    Discrepancy,
+    OrderReconciler,
+    ReconciliationAction,
+    ReconciliationResult,
+)
+
 # Registry for algorithm discovery
 from libra.execution.registry import (
     AlgorithmRegistry,
@@ -197,4 +205,9 @@ __all__ = [
     "get_algorithm_registry",
     "create_algorithm",
     "list_algorithms",
+    # Reconciliation (Issue #109)
+    "OrderReconciler",
+    "ReconciliationResult",
+    "ReconciliationAction",
+    "Discrepancy",
 ]
