@@ -28,6 +28,10 @@ rayon = "1.10"
 # Fast floating point math
 num-traits = "0.2"
 
+# Random number generation for Monte Carlo
+rand = "0.8"
+rand_distr = "0.4"
+
 # SIMD operations (optional)
 packed_simd_2 = { version = "0.3", optional = true }
 

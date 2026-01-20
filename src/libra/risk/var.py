@@ -41,6 +41,15 @@ except ImportError:
     RUST_EWMA_AVAILABLE = False
     _ewma_volatility_rust = None  # type: ignore
 
+# Optional Rust backend for Monte Carlo VaR (Issue #100: parallel simulation)
+try:
+    from libra_core_rs import monte_carlo_var as _monte_carlo_var_rust
+
+    RUST_MONTE_CARLO_AVAILABLE = True
+except ImportError:
+    RUST_MONTE_CARLO_AVAILABLE = False
+    _monte_carlo_var_rust = None  # type: ignore
+
 
 # =============================================================================
 # Numba-compiled EWMA (Issue #70: ~50x speedup)
@@ -402,6 +411,9 @@ class VaRCalculator:
         """
         Calculate Monte Carlo VaR.
 
+        Uses Rust parallel simulation when available (Issue #100: ~5-10x speedup).
+        Falls back to NumPy implementation otherwise.
+
         Simulates future returns based on historical distribution
         parameters and calculates VaR from simulated scenarios.
 
@@ -430,23 +442,39 @@ class VaRCalculator:
         mean_return = float(np.mean(returns_arr))
         volatility = float(np.std(returns_arr, ddof=1))
 
-        # Simulate returns for time horizon
-        simulated_returns = self._rng.normal(
-            mean_return * horizon,
-            volatility * np.sqrt(horizon),
-            n_sims,
-        )
+        # Use Rust implementation if available (parallel, faster RNG)
+        if RUST_MONTE_CARLO_AVAILABLE and _monte_carlo_var_rust is not None:
+            var_pct, cvar_pct = _monte_carlo_var_rust(
+                mean_return,
+                volatility,
+                horizon,
+                n_sims,
+                conf,
+                self.config.seed,
+            )
+        else:
+            # Fallback to NumPy implementation
+            simulated_returns = self._rng.normal(
+                mean_return * horizon,
+                volatility * np.sqrt(horizon),
+                n_sims,
+            )
 
-        # Calculate VaR from simulated distribution
-        var_pct = np.percentile(simulated_returns, (1 - conf) * 100)
+            # Calculate VaR from simulated distribution
+            var_pct_raw = np.percentile(simulated_returns, (1 - conf) * 100)
 
-        # Calculate CVaR
-        cvar_returns = simulated_returns[simulated_returns <= var_pct]
-        cvar_pct = float(np.mean(cvar_returns)) if len(cvar_returns) > 0 else var_pct
+            # Calculate CVaR
+            cvar_returns = simulated_returns[simulated_returns <= var_pct_raw]
+            cvar_pct_raw = (
+                float(np.mean(cvar_returns)) if len(cvar_returns) > 0 else var_pct_raw
+            )
+
+            var_pct = abs(var_pct_raw)
+            cvar_pct = abs(cvar_pct_raw)
 
         # Convert to dollar amounts
-        var_amount = Decimal(str(abs(var_pct))) * portfolio_value
-        cvar_amount = Decimal(str(abs(cvar_pct))) * portfolio_value
+        var_amount = Decimal(str(var_pct)) * portfolio_value
+        cvar_amount = Decimal(str(cvar_pct)) * portfolio_value
 
         return VaRResult(
             var=var_amount,
@@ -455,8 +483,8 @@ class VaRCalculator:
             time_horizon_days=horizon,
             method=VaRMethod.MONTE_CARLO,
             portfolio_value=portfolio_value,
-            var_pct=float(abs(var_pct)) * 100,
-            cvar_pct=float(abs(cvar_pct)) * 100,
+            var_pct=var_pct * 100,
+            cvar_pct=cvar_pct * 100,
             num_observations=len(returns_arr),
             num_simulations=n_sims,
         )

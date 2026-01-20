@@ -51,6 +51,7 @@ fn libra_core_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // VaR functions
     m.add_function(wrap_pyfunction!(var::parametric_var, m)?)?;
     m.add_function(wrap_pyfunction!(var::historical_var, m)?)?;
+    m.add_function(wrap_pyfunction!(var::monte_carlo_var, m)?)?;
 
     // Message bus class
     m.add_class::<message_bus::MessageBus>()?;

@@ -48,6 +48,7 @@ try:
         historical_var,
         kendall_correlation_matrix,
         MessageBus,
+        monte_carlo_var,
         parametric_var,
         risk_parity_weights,
     )
@@ -67,6 +68,7 @@ try:
         # VaR functions
         "parametric_var",
         "historical_var",
+        "monte_carlo_var",
         # Message bus
         "MessageBus",
     ]

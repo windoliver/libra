@@ -1,9 +1,13 @@
 //! Value at Risk (VaR) calculations.
 //!
-//! Provides high-performance VaR computation using parametric and historical methods.
+//! Provides high-performance VaR computation using parametric, historical,
+//! and Monte Carlo methods.
 
 use numpy::PyReadonlyArray1;
 use pyo3::prelude::*;
+use rand::prelude::*;
+use rand_distr::Normal;
+use rayon::prelude::*;
 
 /// Standard normal quantile function (inverse CDF).
 ///
@@ -165,6 +169,103 @@ pub fn historical_var(
     let horizon_factor = (horizon as f64).sqrt();
 
     portfolio_value * var_return * horizon_factor
+}
+
+/// Calculate Monte Carlo VaR with parallel simulation.
+///
+/// Simulates future returns using parallel random number generation
+/// and calculates VaR and CVaR from the simulated distribution.
+///
+/// # Arguments
+///
+/// * `mean_return` - Estimated mean return
+/// * `volatility` - Estimated volatility (standard deviation)
+/// * `horizon` - Time horizon in days
+/// * `n_sims` - Number of simulations
+/// * `confidence` - Confidence level (e.g., 0.95 for 95%)
+/// * `seed` - Optional seed for reproducibility
+///
+/// # Returns
+///
+/// Tuple of (VaR percentage, CVaR percentage) as losses (positive values)
+///
+/// # Example
+///
+/// ```python
+/// from libra_core_rs import monte_carlo_var
+///
+/// # Estimate from historical data: mean=0.0005, vol=0.02
+/// var, cvar = monte_carlo_var(
+///     mean_return=0.0005,
+///     volatility=0.02,
+///     horizon=1,
+///     n_sims=10000,
+///     confidence=0.95,
+/// )
+/// ```
+#[pyfunction]
+#[pyo3(signature = (mean_return, volatility, horizon, n_sims, confidence, seed=None))]
+pub fn monte_carlo_var(
+    mean_return: f64,
+    volatility: f64,
+    horizon: i32,
+    n_sims: usize,
+    confidence: f64,
+    seed: Option<u64>,
+) -> (f64, f64) {
+    if n_sims == 0 || volatility <= 0.0 {
+        return (0.0, 0.0);
+    }
+
+    let horizon_f = horizon as f64;
+    let mean = mean_return * horizon_f;
+    let std = volatility * horizon_f.sqrt();
+
+    // Create normal distribution
+    let normal = match Normal::new(mean, std) {
+        Ok(n) => n,
+        Err(_) => return (0.0, 0.0),
+    };
+
+    // Parallel simulation using Rayon
+    // Each thread gets its own RNG seeded deterministically if seed provided
+    let mut simulated_returns: Vec<f64> = if let Some(s) = seed {
+        // Deterministic parallel generation
+        (0..n_sims)
+            .into_par_iter()
+            .map(|i| {
+                let mut rng = StdRng::seed_from_u64(s.wrapping_add(i as u64));
+                normal.sample(&mut rng)
+            })
+            .collect()
+    } else {
+        // Non-deterministic parallel generation
+        (0..n_sims)
+            .into_par_iter()
+            .map(|_| {
+                let mut rng = thread_rng();
+                normal.sample(&mut rng)
+            })
+            .collect()
+    };
+
+    // Sort for percentile calculation
+    simulated_returns.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Calculate VaR at percentile
+    let var_idx = ((1.0 - confidence) * n_sims as f64).floor() as usize;
+    let var_idx = var_idx.min(n_sims - 1);
+    let var_pct = -simulated_returns[var_idx]; // Positive loss
+
+    // Calculate CVaR (Expected Shortfall): average of worst losses
+    let cvar_pct = if var_idx > 0 {
+        let tail_sum: f64 = simulated_returns[..var_idx].iter().sum();
+        -(tail_sum / var_idx as f64)
+    } else {
+        var_pct
+    };
+
+    (var_pct.max(0.0), cvar_pct.max(0.0))
 }
 
 #[cfg(test)]
