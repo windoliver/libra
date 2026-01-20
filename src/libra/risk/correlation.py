@@ -37,14 +37,18 @@ logger = logging.getLogger(__name__)
 # Issue #98: Rust + Rayon parallelization for 20-100x speedup
 # =============================================================================
 
-# Try to import Rust implementation
+# Try to import Rust implementations (Issue #98, #99)
 try:
     from libra_core_rs import kendall_correlation_matrix as _kendall_tau_rust
+    from libra_core_rs import risk_parity_weights as _risk_parity_rust
 
     RUST_KENDALL_AVAILABLE = True
+    RUST_RISK_PARITY_AVAILABLE = True
 except ImportError:
     RUST_KENDALL_AVAILABLE = False
+    RUST_RISK_PARITY_AVAILABLE = False
     _kendall_tau_rust = None
+    _risk_parity_rust = None
 
 
 def _kendall_tau_matrix(returns_matrix: np.ndarray) -> np.ndarray:
@@ -570,10 +574,20 @@ class CorrelationMonitor:
         """
         Calculate risk parity weights (equal risk contribution).
 
+        Uses Rust implementation when available (Issue #99: 10-20x speedup).
+        Falls back to Python/NumPy implementation otherwise.
+
         Uses iterative algorithm to find weights where each asset
         contributes equally to portfolio risk.
         """
         n = len(symbols)
+
+        # Use Rust implementation if available (10-20x faster)
+        if RUST_RISK_PARITY_AVAILABLE and _risk_parity_rust is not None:
+            weights = _risk_parity_rust(cov_matrix, max_iterations, 1e-6)
+            return {symbols[i]: float(weights[i]) for i in range(n)}
+
+        # Fallback to Python implementation
         volatilities = np.sqrt(np.diag(cov_matrix))
 
         # Initial weights: inverse volatility

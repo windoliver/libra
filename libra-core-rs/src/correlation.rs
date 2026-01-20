@@ -2,8 +2,8 @@
 //!
 //! High-performance matrix computations using ndarray and rayon for parallelism.
 
-use ndarray::Array2;
-use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2};
+use ndarray::{Array1, Array2};
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -282,6 +282,126 @@ pub fn kendall_correlation_matrix<'py>(
     }
 
     Ok(corr.into_pyarray_bound(py))
+}
+
+/// Calculate risk parity weights (equal risk contribution).
+///
+/// Uses iterative algorithm to find weights where each asset
+/// contributes equally to portfolio risk. This is a key optimization
+/// technique in portfolio construction.
+///
+/// # Arguments
+///
+/// * `cov_matrix` - Covariance matrix (n x n)
+/// * `max_iterations` - Maximum number of iterations (default: 100)
+/// * `tolerance` - Convergence tolerance (default: 1e-6)
+///
+/// # Returns
+///
+/// Array of risk parity weights that sum to 1.0
+///
+/// # Example
+///
+/// ```python
+/// from libra_core_rs import risk_parity_weights
+/// import numpy as np
+///
+/// # Create covariance matrix
+/// returns = np.random.randn(252, 5) * 0.02
+/// cov = np.cov(returns, rowvar=False)
+///
+/// # Calculate risk parity weights
+/// weights = risk_parity_weights(cov)
+/// ```
+#[pyfunction]
+#[pyo3(signature = (cov_matrix, max_iterations=100, tolerance=1e-6))]
+pub fn risk_parity_weights<'py>(
+    py: Python<'py>,
+    cov_matrix: PyReadonlyArray2<'py, f64>,
+    max_iterations: usize,
+    tolerance: f64,
+) -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let cov = cov_matrix.as_array();
+    let n = cov.shape()[0];
+
+    if n == 0 {
+        return Ok(Array1::<f64>::zeros(0).into_pyarray_bound(py));
+    }
+
+    // Get volatilities from diagonal
+    let volatilities: Vec<f64> = (0..n).map(|i| cov[[i, i]].sqrt()).collect();
+
+    // Initial weights: inverse volatility
+    let mut weights: Vec<f64> = volatilities.iter().map(|v| 1.0 / v).collect();
+    let sum: f64 = weights.iter().sum();
+    for w in &mut weights {
+        *w /= sum;
+    }
+
+    for _ in 0..max_iterations {
+        // Portfolio variance: w' * Σ * w
+        let mut port_var = 0.0;
+        for i in 0..n {
+            for j in 0..n {
+                port_var += weights[i] * cov[[i, j]] * weights[j];
+            }
+        }
+        let port_vol = port_var.sqrt();
+
+        if port_vol == 0.0 {
+            break;
+        }
+
+        // Marginal risk: (Σ * w) / σ_p
+        let mut marginal: Vec<f64> = vec![0.0; n];
+        for i in 0..n {
+            let mut sum = 0.0;
+            for j in 0..n {
+                sum += cov[[i, j]] * weights[j];
+            }
+            marginal[i] = sum / port_vol;
+        }
+
+        // Risk contribution: w * marginal
+        let risk_contrib: Vec<f64> = weights
+            .iter()
+            .zip(marginal.iter())
+            .map(|(w, m)| w * m)
+            .collect();
+
+        // Target equal contribution
+        let target = port_vol / n as f64;
+
+        // Update weights: w * (target / risk_contrib)
+        let mut new_weights: Vec<f64> = weights
+            .iter()
+            .zip(risk_contrib.iter())
+            .map(|(w, rc)| if *rc > 0.0 { w * (target / rc) } else { *w })
+            .collect();
+
+        // Normalize
+        let sum: f64 = new_weights.iter().sum();
+        for w in &mut new_weights {
+            *w /= sum;
+        }
+
+        // Check convergence
+        let diff: f64 = weights
+            .iter()
+            .zip(new_weights.iter())
+            .map(|(old, new)| (old - new).abs())
+            .sum();
+
+        if diff < tolerance * n as f64 {
+            weights = new_weights;
+            break;
+        }
+
+        weights = new_weights;
+    }
+
+    let result = Array1::from_vec(weights);
+    Ok(result.into_pyarray_bound(py))
 }
 
 #[cfg(test)]

@@ -46,6 +46,7 @@ fn libra_core_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(correlation::correlation_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(correlation::covariance_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(correlation::kendall_correlation_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(correlation::risk_parity_weights, m)?)?;
 
     // VaR functions
     m.add_function(wrap_pyfunction!(var::parametric_var, m)?)?;

@@ -49,6 +49,7 @@ try:
         kendall_correlation_matrix,
         MessageBus,
         parametric_var,
+        risk_parity_weights,
     )
 
     __all__ = [
@@ -62,6 +63,7 @@ try:
         "correlation_matrix",
         "covariance_matrix",
         "kendall_correlation_matrix",
+        "risk_parity_weights",
         # VaR functions
         "parametric_var",
         "historical_var",
