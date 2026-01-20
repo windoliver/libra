@@ -49,6 +49,7 @@ try:
         kendall_correlation_matrix,
         MessageBus,
         monte_carlo_var,
+        OrderBookWidget,
         parametric_var,
         risk_parity_weights,
     )
@@ -71,6 +72,8 @@ try:
         "monte_carlo_var",
         # Message bus
         "MessageBus",
+        # TUI widgets (Issue #101)
+        "OrderBookWidget",
     ]
 
 except ImportError:

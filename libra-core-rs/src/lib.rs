@@ -9,6 +9,7 @@
 //! - `correlation`: Correlation matrix computations
 //! - `var`: Value at Risk calculations
 //! - `message_bus`: High-performance message passing
+//! - `order_book`: Ratatui-based order book widget (Issue #101)
 //!
 //! # Example
 //!
@@ -29,6 +30,7 @@ use pyo3::prelude::*;
 pub mod correlation;
 pub mod ewma;
 pub mod message_bus;
+pub mod order_book;
 pub mod var;
 
 /// LIBRA Core Rust module for Python.
@@ -55,6 +57,9 @@ fn libra_core_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Message bus class
     m.add_class::<message_bus::MessageBus>()?;
+
+    // Order book widget (Issue #101: Ratatui evaluation)
+    m.add_class::<order_book::OrderBookWidget>()?;
 
     // Version info
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
