@@ -390,6 +390,318 @@ class FileStateStore(StateStore):
 
 
 # =============================================================================
+# In-Memory State Store (for testing)
+# =============================================================================
+
+
+class MemoryStateStore(StateStore):
+    """
+    In-memory state store for testing.
+
+    All state is lost on process termination. Use for unit tests
+    and development without external dependencies.
+    """
+
+    def __init__(self) -> None:
+        """Initialize in-memory state store."""
+        self._orders: dict[str, PersistedOrder] = {}
+        self._positions: dict[str, PersistedPosition] = {}
+        self._checkpoints: dict[str, KernelCheckpoint] = {}
+        self._latest_checkpoint_id: str | None = None
+        logger.info("MemoryStateStore initialized")
+
+    async def save_order(self, order: PersistedOrder) -> None:
+        """Save order to memory."""
+        self._orders[order.order_id] = order
+
+    async def get_order(self, order_id: str) -> PersistedOrder | None:
+        """Get order from memory."""
+        return self._orders.get(order_id)
+
+    async def get_open_orders(self) -> list[PersistedOrder]:
+        """Get all open orders."""
+        return [
+            o for o in self._orders.values()
+            if o.state in (OrderState.OPEN, OrderState.PARTIALLY_FILLED, OrderState.PENDING)
+        ]
+
+    async def delete_order(self, order_id: str) -> None:
+        """Delete order from memory."""
+        self._orders.pop(order_id, None)
+
+    async def save_position(self, position: PersistedPosition) -> None:
+        """Save position to memory."""
+        self._positions[position.symbol] = position
+
+    async def get_position(self, symbol: str) -> PersistedPosition | None:
+        """Get position from memory."""
+        return self._positions.get(symbol)
+
+    async def get_positions(self) -> list[PersistedPosition]:
+        """Get all positions."""
+        return list(self._positions.values())
+
+    async def delete_position(self, symbol: str) -> None:
+        """Delete position from memory."""
+        self._positions.pop(symbol, None)
+
+    async def save_checkpoint(self, checkpoint: KernelCheckpoint) -> None:
+        """Save checkpoint to memory."""
+        self._checkpoints[checkpoint.checkpoint_id] = checkpoint
+        self._latest_checkpoint_id = checkpoint.checkpoint_id
+
+    async def get_latest_checkpoint(self) -> KernelCheckpoint | None:
+        """Get most recent checkpoint."""
+        if self._latest_checkpoint_id is None:
+            return None
+        return self._checkpoints.get(self._latest_checkpoint_id)
+
+    async def clear_all(self) -> None:
+        """Clear all in-memory state."""
+        self._orders.clear()
+        self._positions.clear()
+        self._checkpoints.clear()
+        self._latest_checkpoint_id = None
+
+
+# =============================================================================
+# Redis State Store (Issue #108)
+# =============================================================================
+
+
+# Check if redis is available
+try:
+    import redis.asyncio as aioredis
+
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+
+
+class RedisStateStore(StateStore):
+    """
+    Redis-backed state store for production use.
+
+    Provides durable state persistence with:
+    - Automatic reconnection
+    - Configurable TTL for old data
+    - Key prefix for multi-tenant support
+    - Atomic operations with Lua scripts
+
+    Key schema:
+        {prefix}orders:{order_id} -> JSON
+        {prefix}positions:{symbol} -> JSON
+        {prefix}checkpoints:{checkpoint_id} -> JSON
+        {prefix}latest_checkpoint -> checkpoint_id
+
+    Example:
+        store = RedisStateStore(
+            url="redis://localhost:6379",
+            prefix="libra:prod:",
+            ttl_seconds=86400,  # 24 hours
+        )
+        await store.connect()
+
+        # Use with kernel
+        kernel = TradingKernel(state_store=store)
+    """
+
+    def __init__(
+        self,
+        url: str = "redis://localhost:6379",
+        prefix: str = "libra:",
+        ttl_seconds: int | None = None,
+        db: int = 0,
+    ) -> None:
+        """
+        Initialize Redis state store.
+
+        Args:
+            url: Redis connection URL
+            prefix: Key prefix for all state keys
+            ttl_seconds: Optional TTL for state entries
+            db: Redis database number
+        """
+        if not REDIS_AVAILABLE:
+            raise ImportError(
+                "redis package not installed. Install with: pip install redis[hiredis]"
+            )
+
+        self._url = url
+        self._prefix = prefix
+        self._ttl = ttl_seconds
+        self._db = db
+        self._client: aioredis.Redis | None = None
+        self._connected = False
+
+    async def connect(self) -> None:
+        """Connect to Redis."""
+        if self._connected:
+            return
+
+        self._client = aioredis.from_url(
+            self._url,
+            db=self._db,
+            decode_responses=True,
+        )
+        # Test connection
+        await self._client.ping()
+        self._connected = True
+        logger.info("RedisStateStore connected to %s", self._url)
+
+    async def disconnect(self) -> None:
+        """Disconnect from Redis."""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+            self._connected = False
+            logger.info("RedisStateStore disconnected")
+
+    def _key(self, *parts: str) -> str:
+        """Build prefixed key."""
+        return f"{self._prefix}{':'.join(parts)}"
+
+    async def _ensure_connected(self) -> None:
+        """Ensure Redis connection is active."""
+        if not self._connected or self._client is None:
+            await self.connect()
+
+    async def save_order(self, order: PersistedOrder) -> None:
+        """Save order to Redis."""
+        await self._ensure_connected()
+        key = self._key("orders", order.order_id)
+        value = json.dumps(order.to_dict())
+        if self._ttl:
+            await self._client.setex(key, self._ttl, value)
+        else:
+            await self._client.set(key, value)
+
+    async def get_order(self, order_id: str) -> PersistedOrder | None:
+        """Get order from Redis."""
+        await self._ensure_connected()
+        key = self._key("orders", order_id)
+        data = await self._client.get(key)
+        if data is None:
+            return None
+        return PersistedOrder.from_dict(json.loads(data))
+
+    async def get_open_orders(self) -> list[PersistedOrder]:
+        """Get all open orders."""
+        await self._ensure_connected()
+        pattern = self._key("orders", "*")
+        orders = []
+
+        async for key in self._client.scan_iter(match=pattern):
+            data = await self._client.get(key)
+            if data:
+                order = PersistedOrder.from_dict(json.loads(data))
+                if order.state in (OrderState.OPEN, OrderState.PARTIALLY_FILLED, OrderState.PENDING):
+                    orders.append(order)
+
+        return orders
+
+    async def delete_order(self, order_id: str) -> None:
+        """Delete order from Redis."""
+        await self._ensure_connected()
+        key = self._key("orders", order_id)
+        await self._client.delete(key)
+
+    async def save_position(self, position: PersistedPosition) -> None:
+        """Save position to Redis."""
+        await self._ensure_connected()
+        # Sanitize symbol for key
+        safe_symbol = position.symbol.replace("/", "_")
+        key = self._key("positions", safe_symbol)
+        value = json.dumps(position.to_dict())
+        if self._ttl:
+            await self._client.setex(key, self._ttl, value)
+        else:
+            await self._client.set(key, value)
+
+    async def get_position(self, symbol: str) -> PersistedPosition | None:
+        """Get position from Redis."""
+        await self._ensure_connected()
+        safe_symbol = symbol.replace("/", "_")
+        key = self._key("positions", safe_symbol)
+        data = await self._client.get(key)
+        if data is None:
+            return None
+        return PersistedPosition.from_dict(json.loads(data))
+
+    async def get_positions(self) -> list[PersistedPosition]:
+        """Get all positions."""
+        await self._ensure_connected()
+        pattern = self._key("positions", "*")
+        positions = []
+
+        async for key in self._client.scan_iter(match=pattern):
+            data = await self._client.get(key)
+            if data:
+                positions.append(PersistedPosition.from_dict(json.loads(data)))
+
+        return positions
+
+    async def delete_position(self, symbol: str) -> None:
+        """Delete position from Redis."""
+        await self._ensure_connected()
+        safe_symbol = symbol.replace("/", "_")
+        key = self._key("positions", safe_symbol)
+        await self._client.delete(key)
+
+    async def save_checkpoint(self, checkpoint: KernelCheckpoint) -> None:
+        """Save checkpoint to Redis."""
+        await self._ensure_connected()
+
+        # Save checkpoint
+        key = self._key("checkpoints", checkpoint.checkpoint_id)
+        value = json.dumps(checkpoint.to_dict())
+        if self._ttl:
+            await self._client.setex(key, self._ttl, value)
+        else:
+            await self._client.set(key, value)
+
+        # Update latest pointer
+        latest_key = self._key("latest_checkpoint")
+        await self._client.set(latest_key, checkpoint.checkpoint_id)
+
+    async def get_latest_checkpoint(self) -> KernelCheckpoint | None:
+        """Get most recent checkpoint."""
+        await self._ensure_connected()
+
+        latest_key = self._key("latest_checkpoint")
+        checkpoint_id = await self._client.get(latest_key)
+        if checkpoint_id is None:
+            return None
+
+        key = self._key("checkpoints", checkpoint_id)
+        data = await self._client.get(key)
+        if data is None:
+            return None
+
+        return KernelCheckpoint.from_dict(json.loads(data))
+
+    async def clear_all(self) -> None:
+        """Clear all state with prefix."""
+        await self._ensure_connected()
+        pattern = self._key("*")
+
+        # Delete in batches
+        async for key in self._client.scan_iter(match=pattern):
+            await self._client.delete(key)
+
+        logger.warning("RedisStateStore cleared all state with prefix: %s", self._prefix)
+
+    async def __aenter__(self) -> "RedisStateStore":
+        """Async context manager entry."""
+        await self.connect()
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        """Async context manager exit."""
+        await self.disconnect()
+
+
+# =============================================================================
 # State Verification
 # =============================================================================
 

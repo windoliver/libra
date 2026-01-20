@@ -29,6 +29,19 @@ from libra.core.message_bus import (
     MessageBusConfig,
     Subscription,
 )
+from libra.core.state_store import (
+    REDIS_AVAILABLE,
+    FileStateStore,
+    KernelCheckpoint,
+    MemoryStateStore,
+    OrderState,
+    PersistedOrder,
+    PersistedPosition,
+    RecoveryResult,
+    RedisStateStore,
+    StateStore,
+    StateVerificationError,
+)
 
 
 __all__ = [
@@ -49,4 +62,16 @@ __all__ = [
     "TradingKernel",
     "decode_event",
     "encode_event",
+    # State Store (Issue #108)
+    "StateStore",
+    "FileStateStore",
+    "MemoryStateStore",
+    "RedisStateStore",
+    "REDIS_AVAILABLE",
+    "PersistedOrder",
+    "PersistedPosition",
+    "KernelCheckpoint",
+    "OrderState",
+    "RecoveryResult",
+    "StateVerificationError",
 ]

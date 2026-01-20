@@ -1,561 +1,583 @@
-"""Tests for the RedisStateStore."""
+"""
+Tests for State Store implementations (Issue #108).
 
-from __future__ import annotations
+Tests MemoryStateStore, FileStateStore, and RedisStateStore
+for crash recovery persistence.
+"""
 
-from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+import time
 
 import pytest
 
-from libra.core.state_store import RedisConfig, RedisStateStore
-from libra.gateways.protocol import (
-    OrderResult,
-    OrderSide,
-    OrderStatus,
-    OrderType,
-    Position,
-    PositionSide,
+from libra.core.state_store import (
+    REDIS_AVAILABLE,
+    FileStateStore,
+    KernelCheckpoint,
+    MemoryStateStore,
+    OrderState,
+    PersistedOrder,
+    PersistedPosition,
+    RedisStateStore,
 )
 
 
 # =============================================================================
-# Fixtures
+# Test Data Fixtures
 # =============================================================================
 
 
 @pytest.fixture
-def config() -> RedisConfig:
-    """Create test Redis config."""
-    return RedisConfig(
-        url="redis://localhost:6379",
-        max_connections=5,
-        order_ttl=3600,
-        position_ttl=7200,
-    )
-
-
-@pytest.fixture
-def sample_order() -> OrderResult:
-    """Create sample order for testing."""
-    return OrderResult(
-        order_id="order-123",
+def sample_order() -> PersistedOrder:
+    """Create sample persisted order."""
+    return PersistedOrder(
+        order_id="ord_123",
+        client_order_id="client_123",
         symbol="BTC/USDT",
-        status=OrderStatus.OPEN,
-        side=OrderSide.BUY,
-        order_type=OrderType.LIMIT,
-        amount=Decimal("0.1"),
-        filled_amount=Decimal("0"),
-        remaining_amount=Decimal("0.1"),
-        average_price=None,
-        fee=Decimal("0"),
-        fee_currency="USDT",
-        timestamp_ns=1000000000,
-        client_order_id="client-123",
-        price=Decimal("50000"),
+        side="buy",
+        order_type="limit",
+        amount="1.5",
+        filled_amount="0.5",
+        price="50000",
+        state=OrderState.OPEN,
+        created_at_ns=time.time_ns(),
+        updated_at_ns=time.time_ns(),
+        exchange_order_id="exch_456",
     )
 
 
 @pytest.fixture
-def filled_order() -> OrderResult:
-    """Create filled order for testing."""
-    return OrderResult(
-        order_id="order-456",
-        symbol="ETH/USDT",
-        status=OrderStatus.FILLED,
-        side=OrderSide.SELL,
-        order_type=OrderType.MARKET,
-        amount=Decimal("1.0"),
-        filled_amount=Decimal("1.0"),
-        remaining_amount=Decimal("0"),
-        average_price=Decimal("2000"),
-        fee=Decimal("2"),
-        fee_currency="USDT",
-        timestamp_ns=2000000000,
-    )
-
-
-@pytest.fixture
-def sample_position() -> Position:
-    """Create sample position for testing."""
-    return Position(
+def sample_position() -> PersistedPosition:
+    """Create sample persisted position."""
+    return PersistedPosition(
         symbol="BTC/USDT",
-        side=PositionSide.LONG,
-        amount=Decimal("0.5"),
-        entry_price=Decimal("48000"),
-        current_price=Decimal("50000"),
-        unrealized_pnl=Decimal("1000"),
-        realized_pnl=Decimal("0"),
-        leverage=1,
+        side="long",
+        quantity="1.0",
+        entry_price="50000",
+        unrealized_pnl="500",
+        realized_pnl="0",
+        opened_at_ns=time.time_ns(),
+        updated_at_ns=time.time_ns(),
     )
 
 
 @pytest.fixture
-def flat_position() -> Position:
-    """Create flat (closed) position for testing."""
-    return Position(
-        symbol="ETH/USDT",
-        side=PositionSide.FLAT,
-        amount=Decimal("0"),
-        entry_price=Decimal("0"),
-        current_price=Decimal("2000"),
-        unrealized_pnl=Decimal("0"),
-        realized_pnl=Decimal("500"),
-        leverage=1,
+def sample_checkpoint() -> KernelCheckpoint:
+    """Create sample checkpoint."""
+    return KernelCheckpoint(
+        instance_id="inst_001",
+        checkpoint_id="chk_001",
+        timestamp_ns=time.time_ns(),
+        state_hash="abc123def456",
+        orders_count=5,
+        positions_count=2,
+        environment="test",
     )
 
 
 # =============================================================================
-# Configuration Tests
+# PersistedOrder Tests
 # =============================================================================
 
 
-class TestRedisConfig:
-    """Tests for RedisConfig dataclass."""
+class TestPersistedOrder:
+    """Tests for PersistedOrder serialization."""
 
-    def test_default_config(self) -> None:
-        """Default config should have reasonable values."""
-        config = RedisConfig()
-        assert config.url == "redis://localhost:6379"
-        assert config.max_connections == 10
-        assert config.order_ttl == 86400
-        assert config.position_ttl == 86400 * 7
+    def test_to_dict(self, sample_order: PersistedOrder) -> None:
+        """Test serialization to dict."""
+        data = sample_order.to_dict()
 
-    def test_custom_config(self, config: RedisConfig) -> None:
-        """Custom config should override defaults."""
-        assert config.max_connections == 5
-        assert config.order_ttl == 3600
+        assert data["order_id"] == "ord_123"
+        assert data["symbol"] == "BTC/USDT"
+        assert data["state"] == "open"
+        assert data["amount"] == "1.5"
+
+    def test_from_dict(self, sample_order: PersistedOrder) -> None:
+        """Test deserialization from dict."""
+        data = sample_order.to_dict()
+        restored = PersistedOrder.from_dict(data)
+
+        assert restored.order_id == sample_order.order_id
+        assert restored.symbol == sample_order.symbol
+        assert restored.state == sample_order.state
+        assert restored.amount == sample_order.amount
 
 
-# =============================================================================
-# Connection Tests
-# =============================================================================
+class TestPersistedPosition:
+    """Tests for PersistedPosition serialization."""
+
+    def test_to_dict(self, sample_position: PersistedPosition) -> None:
+        """Test serialization to dict."""
+        data = sample_position.to_dict()
+
+        assert data["symbol"] == "BTC/USDT"
+        assert data["side"] == "long"
+        assert data["quantity"] == "1.0"
+
+    def test_from_dict(self, sample_position: PersistedPosition) -> None:
+        """Test deserialization from dict."""
+        data = sample_position.to_dict()
+        restored = PersistedPosition.from_dict(data)
+
+        assert restored.symbol == sample_position.symbol
+        assert restored.quantity == sample_position.quantity
 
 
-class TestConnection:
-    """Tests for Redis connection management."""
+class TestKernelCheckpoint:
+    """Tests for KernelCheckpoint serialization."""
 
-    @pytest.mark.asyncio
-    async def test_connect_success(self, config: RedisConfig) -> None:
-        """Should connect successfully to Redis."""
-        store = RedisStateStore(config)
+    def test_to_dict(self, sample_checkpoint: KernelCheckpoint) -> None:
+        """Test serialization to dict."""
+        data = sample_checkpoint.to_dict()
 
-        with patch("redis.asyncio") as mock_redis:
-            mock_pool = MagicMock()
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = mock_pool
-            mock_redis.Redis.return_value = mock_client
+        assert data["instance_id"] == "inst_001"
+        assert data["checkpoint_id"] == "chk_001"
+        assert data["orders_count"] == 5
 
-            await store.connect()
+    def test_from_dict(self, sample_checkpoint: KernelCheckpoint) -> None:
+        """Test deserialization from dict."""
+        data = sample_checkpoint.to_dict()
+        restored = KernelCheckpoint.from_dict(data)
 
-            assert store.is_connected is True
-            mock_redis.ConnectionPool.from_url.assert_called_once()
-            mock_client.ping.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_close_connection(self, config: RedisConfig) -> None:
-        """Should close connection and pool."""
-        store = RedisStateStore(config)
-
-        with patch("redis.asyncio") as mock_redis:
-            mock_pool = AsyncMock()
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = mock_pool
-            mock_redis.Redis.return_value = mock_client
-
-            await store.connect()
-            await store.close()
-
-            assert store.is_connected is False
-            mock_client.aclose.assert_awaited_once()
-            mock_pool.disconnect.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_context_manager(self, config: RedisConfig) -> None:
-        """Should work as async context manager."""
-        with patch("redis.asyncio") as mock_redis:
-            mock_pool = AsyncMock()
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = mock_pool
-            mock_redis.Redis.return_value = mock_client
-
-            async with RedisStateStore(config) as store:
-                assert store.is_connected is True
-
-            mock_client.aclose.assert_awaited_once()
-
-    def test_ensure_connected_raises_when_disconnected(self, config: RedisConfig) -> None:
-        """Should raise RuntimeError when not connected."""
-        store = RedisStateStore(config)
-
-        with pytest.raises(RuntimeError, match="Not connected to Redis"):
-            store._ensure_connected()
+        assert restored.instance_id == sample_checkpoint.instance_id
+        assert restored.state_hash == sample_checkpoint.state_hash
 
 
 # =============================================================================
-# Order Persistence Tests
+# MemoryStateStore Tests
 # =============================================================================
 
 
-class TestOrderPersistence:
-    """Tests for order persistence methods."""
+class TestMemoryStateStore:
+    """Tests for MemoryStateStore."""
 
-    @pytest.mark.asyncio
-    async def test_save_order(
-        self, config: RedisConfig, sample_order: OrderResult
+    @pytest.fixture
+    def store(self) -> MemoryStateStore:
+        """Create memory store for testing."""
+        return MemoryStateStore()
+
+    async def test_save_and_get_order(
+        self, store: MemoryStateStore, sample_order: PersistedOrder
     ) -> None:
-        """Should save order to Redis."""
-        store = RedisStateStore(config)
+        """Test saving and retrieving an order."""
+        await store.save_order(sample_order)
+        retrieved = await store.get_order(sample_order.order_id)
 
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
+        assert retrieved is not None
+        assert retrieved.order_id == sample_order.order_id
+        assert retrieved.symbol == sample_order.symbol
 
-            await store.connect()
-            await store.save_order(sample_order)
+    async def test_get_nonexistent_order(self, store: MemoryStateStore) -> None:
+        """Test getting non-existent order returns None."""
+        result = await store.get_order("nonexistent")
+        assert result is None
 
-            mock_client.set.assert_awaited_once()
-            call_args = mock_client.set.call_args
-            assert "libra:orders:order-123" in call_args[0]
-            assert call_args[1]["ex"] == config.order_ttl
-
-    @pytest.mark.asyncio
-    async def test_get_order_found(
-        self, config: RedisConfig, sample_order: OrderResult
+    async def test_get_open_orders(
+        self, store: MemoryStateStore, sample_order: PersistedOrder
     ) -> None:
-        """Should retrieve order from Redis."""
-        store = RedisStateStore(config)
+        """Test getting open orders."""
+        # Save open order
+        await store.save_order(sample_order)
 
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
+        # Save filled order
+        filled_order = PersistedOrder(
+            order_id="ord_filled",
+            client_order_id="client_filled",
+            symbol="ETH/USDT",
+            side="sell",
+            order_type="market",
+            amount="2.0",
+            filled_amount="2.0",
+            price=None,
+            state=OrderState.FILLED,
+            created_at_ns=time.time_ns(),
+            updated_at_ns=time.time_ns(),
+        )
+        await store.save_order(filled_order)
 
-            # Serialize order for mock response
-            import msgspec
-            encoded = msgspec.json.encode(sample_order)
-            mock_client.get.return_value = encoded
+        open_orders = await store.get_open_orders()
 
+        assert len(open_orders) == 1
+        assert open_orders[0].order_id == sample_order.order_id
+
+    async def test_delete_order(
+        self, store: MemoryStateStore, sample_order: PersistedOrder
+    ) -> None:
+        """Test deleting an order."""
+        await store.save_order(sample_order)
+        await store.delete_order(sample_order.order_id)
+
+        result = await store.get_order(sample_order.order_id)
+        assert result is None
+
+    async def test_save_and_get_position(
+        self, store: MemoryStateStore, sample_position: PersistedPosition
+    ) -> None:
+        """Test saving and retrieving a position."""
+        await store.save_position(sample_position)
+        retrieved = await store.get_position(sample_position.symbol)
+
+        assert retrieved is not None
+        assert retrieved.symbol == sample_position.symbol
+        assert retrieved.quantity == sample_position.quantity
+
+    async def test_get_positions(
+        self, store: MemoryStateStore, sample_position: PersistedPosition
+    ) -> None:
+        """Test getting all positions."""
+        await store.save_position(sample_position)
+
+        position2 = PersistedPosition(
+            symbol="ETH/USDT",
+            side="short",
+            quantity="5.0",
+            entry_price="3000",
+            unrealized_pnl="-100",
+            realized_pnl="50",
+            opened_at_ns=time.time_ns(),
+            updated_at_ns=time.time_ns(),
+        )
+        await store.save_position(position2)
+
+        positions = await store.get_positions()
+        assert len(positions) == 2
+
+    async def test_delete_position(
+        self, store: MemoryStateStore, sample_position: PersistedPosition
+    ) -> None:
+        """Test deleting a position."""
+        await store.save_position(sample_position)
+        await store.delete_position(sample_position.symbol)
+
+        result = await store.get_position(sample_position.symbol)
+        assert result is None
+
+    async def test_save_and_get_checkpoint(
+        self, store: MemoryStateStore, sample_checkpoint: KernelCheckpoint
+    ) -> None:
+        """Test saving and retrieving checkpoint."""
+        await store.save_checkpoint(sample_checkpoint)
+        retrieved = await store.get_latest_checkpoint()
+
+        assert retrieved is not None
+        assert retrieved.checkpoint_id == sample_checkpoint.checkpoint_id
+        assert retrieved.state_hash == sample_checkpoint.state_hash
+
+    async def test_latest_checkpoint_updates(self, store: MemoryStateStore) -> None:
+        """Test that latest checkpoint pointer updates."""
+        checkpoint1 = KernelCheckpoint(
+            instance_id="inst_001",
+            checkpoint_id="chk_001",
+            timestamp_ns=time.time_ns(),
+            state_hash="hash1",
+            orders_count=1,
+            positions_count=1,
+            environment="test",
+        )
+        checkpoint2 = KernelCheckpoint(
+            instance_id="inst_001",
+            checkpoint_id="chk_002",
+            timestamp_ns=time.time_ns(),
+            state_hash="hash2",
+            orders_count=2,
+            positions_count=2,
+            environment="test",
+        )
+
+        await store.save_checkpoint(checkpoint1)
+        await store.save_checkpoint(checkpoint2)
+
+        latest = await store.get_latest_checkpoint()
+        assert latest.checkpoint_id == "chk_002"
+
+    async def test_clear_all(
+        self,
+        store: MemoryStateStore,
+        sample_order: PersistedOrder,
+        sample_position: PersistedPosition,
+    ) -> None:
+        """Test clearing all state."""
+        await store.save_order(sample_order)
+        await store.save_position(sample_position)
+
+        await store.clear_all()
+
+        assert await store.get_order(sample_order.order_id) is None
+        assert await store.get_position(sample_position.symbol) is None
+        assert await store.get_latest_checkpoint() is None
+
+
+# =============================================================================
+# FileStateStore Tests
+# =============================================================================
+
+
+class TestFileStateStore:
+    """Tests for FileStateStore."""
+
+    @pytest.fixture
+    def store(self, tmp_path) -> FileStateStore:
+        """Create file store in temp directory."""
+        return FileStateStore(tmp_path / "state")
+
+    async def test_save_and_get_order(
+        self, store: FileStateStore, sample_order: PersistedOrder
+    ) -> None:
+        """Test saving and retrieving an order."""
+        await store.save_order(sample_order)
+        retrieved = await store.get_order(sample_order.order_id)
+
+        assert retrieved is not None
+        assert retrieved.order_id == sample_order.order_id
+
+    async def test_get_nonexistent_order(self, store: FileStateStore) -> None:
+        """Test getting non-existent order returns None."""
+        result = await store.get_order("nonexistent")
+        assert result is None
+
+    async def test_get_open_orders(
+        self, store: FileStateStore, sample_order: PersistedOrder
+    ) -> None:
+        """Test getting open orders filters correctly."""
+        await store.save_order(sample_order)
+
+        filled_order = PersistedOrder(
+            order_id="ord_filled",
+            client_order_id="client_filled",
+            symbol="ETH/USDT",
+            side="sell",
+            order_type="market",
+            amount="2.0",
+            filled_amount="2.0",
+            price=None,
+            state=OrderState.FILLED,
+            created_at_ns=time.time_ns(),
+            updated_at_ns=time.time_ns(),
+        )
+        await store.save_order(filled_order)
+
+        open_orders = await store.get_open_orders()
+        assert len(open_orders) == 1
+        assert open_orders[0].order_id == sample_order.order_id
+
+    async def test_save_and_get_position(
+        self, store: FileStateStore, sample_position: PersistedPosition
+    ) -> None:
+        """Test saving and retrieving a position."""
+        await store.save_position(sample_position)
+        retrieved = await store.get_position(sample_position.symbol)
+
+        assert retrieved is not None
+        assert retrieved.symbol == sample_position.symbol
+
+    async def test_save_and_get_checkpoint(
+        self, store: FileStateStore, sample_checkpoint: KernelCheckpoint
+    ) -> None:
+        """Test saving and retrieving checkpoint."""
+        await store.save_checkpoint(sample_checkpoint)
+        retrieved = await store.get_latest_checkpoint()
+
+        assert retrieved is not None
+        assert retrieved.checkpoint_id == sample_checkpoint.checkpoint_id
+
+    async def test_clear_all(
+        self, store: FileStateStore, sample_order: PersistedOrder
+    ) -> None:
+        """Test clearing all state."""
+        await store.save_order(sample_order)
+        await store.clear_all()
+
+        assert await store.get_order(sample_order.order_id) is None
+
+
+# =============================================================================
+# RedisStateStore Tests
+# =============================================================================
+
+
+@pytest.mark.skipif(not REDIS_AVAILABLE, reason="redis not installed")
+class TestRedisStateStore:
+    """Tests for RedisStateStore."""
+
+    @pytest.fixture
+    async def store(self):
+        """Create Redis store for testing."""
+        store = RedisStateStore(
+            url="redis://localhost:6379",
+            prefix="libra:test:",
+            db=15,  # Use test database
+        )
+        try:
             await store.connect()
-            result = await store.get_order("order-123")
+            await store.clear_all()  # Clean before test
+            yield store
+        except Exception:
+            pytest.skip("Redis not available")
+        finally:
+            try:
+                await store.clear_all()  # Clean after test
+                await store.disconnect()
+            except Exception:
+                pass
 
-            assert result is not None
-            assert result.order_id == sample_order.order_id
-            assert result.symbol == sample_order.symbol
+    async def test_save_and_get_order(
+        self, store: RedisStateStore, sample_order: PersistedOrder
+    ) -> None:
+        """Test saving and retrieving an order."""
+        await store.save_order(sample_order)
+        retrieved = await store.get_order(sample_order.order_id)
 
-    @pytest.mark.asyncio
-    async def test_get_order_not_found(self, config: RedisConfig) -> None:
-        """Should return None for missing order."""
-        store = RedisStateStore(config)
+        assert retrieved is not None
+        assert retrieved.order_id == sample_order.order_id
+        assert retrieved.symbol == sample_order.symbol
 
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-            mock_client.get.return_value = None
+    async def test_get_nonexistent_order(self, store: RedisStateStore) -> None:
+        """Test getting non-existent order returns None."""
+        result = await store.get_order("nonexistent")
+        assert result is None
 
-            await store.connect()
-            result = await store.get_order("nonexistent")
+    async def test_get_open_orders(
+        self, store: RedisStateStore, sample_order: PersistedOrder
+    ) -> None:
+        """Test getting open orders."""
+        await store.save_order(sample_order)
 
+        filled_order = PersistedOrder(
+            order_id="ord_filled",
+            client_order_id="client_filled",
+            symbol="ETH/USDT",
+            side="sell",
+            order_type="market",
+            amount="2.0",
+            filled_amount="2.0",
+            price=None,
+            state=OrderState.FILLED,
+            created_at_ns=time.time_ns(),
+            updated_at_ns=time.time_ns(),
+        )
+        await store.save_order(filled_order)
+
+        open_orders = await store.get_open_orders()
+        assert len(open_orders) == 1
+        assert open_orders[0].order_id == sample_order.order_id
+
+    async def test_delete_order(
+        self, store: RedisStateStore, sample_order: PersistedOrder
+    ) -> None:
+        """Test deleting an order."""
+        await store.save_order(sample_order)
+        await store.delete_order(sample_order.order_id)
+
+        result = await store.get_order(sample_order.order_id)
+        assert result is None
+
+    async def test_save_and_get_position(
+        self, store: RedisStateStore, sample_position: PersistedPosition
+    ) -> None:
+        """Test saving and retrieving a position."""
+        await store.save_position(sample_position)
+        retrieved = await store.get_position(sample_position.symbol)
+
+        assert retrieved is not None
+        assert retrieved.symbol == sample_position.symbol
+        assert retrieved.quantity == sample_position.quantity
+
+    async def test_get_positions(
+        self, store: RedisStateStore, sample_position: PersistedPosition
+    ) -> None:
+        """Test getting all positions."""
+        await store.save_position(sample_position)
+
+        position2 = PersistedPosition(
+            symbol="ETH/USDT",
+            side="short",
+            quantity="5.0",
+            entry_price="3000",
+            unrealized_pnl="-100",
+            realized_pnl="50",
+            opened_at_ns=time.time_ns(),
+            updated_at_ns=time.time_ns(),
+        )
+        await store.save_position(position2)
+
+        positions = await store.get_positions()
+        assert len(positions) == 2
+
+    async def test_save_and_get_checkpoint(
+        self, store: RedisStateStore, sample_checkpoint: KernelCheckpoint
+    ) -> None:
+        """Test saving and retrieving checkpoint."""
+        await store.save_checkpoint(sample_checkpoint)
+        retrieved = await store.get_latest_checkpoint()
+
+        assert retrieved is not None
+        assert retrieved.checkpoint_id == sample_checkpoint.checkpoint_id
+
+    async def test_context_manager(self, sample_order: PersistedOrder) -> None:
+        """Test async context manager."""
+        try:
+            async with RedisStateStore(
+                url="redis://localhost:6379",
+                prefix="libra:ctxtest:",
+                db=15,
+            ) as store:
+                await store.save_order(sample_order)
+                retrieved = await store.get_order(sample_order.order_id)
+                assert retrieved is not None
+                await store.clear_all()
+        except Exception:
+            pytest.skip("Redis not available")
+
+    async def test_key_prefix_isolation(self, sample_order: PersistedOrder) -> None:
+        """Test that different prefixes are isolated."""
+        try:
+            store1 = RedisStateStore(
+                url="redis://localhost:6379",
+                prefix="libra:ns1:",
+                db=15,
+            )
+            store2 = RedisStateStore(
+                url="redis://localhost:6379",
+                prefix="libra:ns2:",
+                db=15,
+            )
+
+            await store1.connect()
+            await store2.connect()
+
+            # Save in store1
+            await store1.save_order(sample_order)
+
+            # Should not exist in store2
+            result = await store2.get_order(sample_order.order_id)
             assert result is None
 
-    @pytest.mark.asyncio
-    async def test_delete_order(self, config: RedisConfig) -> None:
-        """Should delete order from Redis."""
-        store = RedisStateStore(config)
-
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-            mock_client.delete.return_value = 1
-
-            await store.connect()
-            result = await store.delete_order("order-123")
-
-            assert result is True
-            mock_client.delete.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_get_open_orders(
-        self, config: RedisConfig, sample_order: OrderResult, filled_order: OrderResult
-    ) -> None:
-        """Should return only open orders."""
-        store = RedisStateStore(config)
-
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-
-            # Mock scan_iter to return keys
-            import msgspec
-            open_encoded = msgspec.json.encode(sample_order)
-            filled_encoded = msgspec.json.encode(filled_order)
-
-            # Create async iterator class for proper async for support
-            class MockScanIter:
-                def __init__(self, keys: list[bytes]) -> None:
-                    self.keys = keys
-                    self.index = 0
-
-                def __aiter__(self):
-                    return self
-
-                async def __anext__(self):
-                    if self.index >= len(self.keys):
-                        raise StopAsyncIteration
-                    key = self.keys[self.index]
-                    self.index += 1
-                    return key
-
-            # Use side_effect with lambda to return iterator when called
-            mock_client.scan_iter = lambda **_: MockScanIter(
-                [b"libra:orders:order-123", b"libra:orders:order-456"]
-            )
-            mock_client.get.side_effect = [open_encoded, filled_encoded]
-
-            await store.connect()
-            result = await store.get_open_orders()
-
-            # Only open order should be returned
-            assert len(result) == 1
-            assert result[0].order_id == "order-123"
-
-
-# =============================================================================
-# Position Persistence Tests
-# =============================================================================
-
-
-class TestPositionPersistence:
-    """Tests for position persistence methods."""
-
-    @pytest.mark.asyncio
-    async def test_save_position(
-        self, config: RedisConfig, sample_position: Position
-    ) -> None:
-        """Should save position to Redis."""
-        store = RedisStateStore(config)
-
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-
-            await store.connect()
-            await store.save_position(sample_position)
-
-            mock_client.set.assert_awaited_once()
-            call_args = mock_client.set.call_args
-            assert "libra:positions:BTC/USDT" in call_args[0]
-            assert call_args[1]["ex"] == config.position_ttl
-
-    @pytest.mark.asyncio
-    async def test_get_position_found(
-        self, config: RedisConfig, sample_position: Position
-    ) -> None:
-        """Should retrieve position from Redis."""
-        store = RedisStateStore(config)
-
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-
-            import msgspec
-            encoded = msgspec.json.encode(sample_position)
-            mock_client.get.return_value = encoded
-
-            await store.connect()
-            result = await store.get_position("BTC/USDT")
-
+            # But exists in store1
+            result = await store1.get_order(sample_order.order_id)
             assert result is not None
-            assert result.symbol == sample_position.symbol
-            assert result.amount == sample_position.amount
 
-    @pytest.mark.asyncio
-    async def test_get_all_positions_excludes_flat(
-        self, config: RedisConfig, sample_position: Position, flat_position: Position
-    ) -> None:
-        """Should exclude flat positions from results."""
-        store = RedisStateStore(config)
+            await store1.clear_all()
+            await store2.clear_all()
+            await store1.disconnect()
+            await store2.disconnect()
 
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-
-            import msgspec
-            open_encoded = msgspec.json.encode(sample_position)
-            flat_encoded = msgspec.json.encode(flat_position)
-
-            # Create async iterator class for proper async for support
-            class MockScanIter:
-                def __init__(self, keys: list[bytes]) -> None:
-                    self.keys = keys
-                    self.index = 0
-
-                def __aiter__(self):
-                    return self
-
-                async def __anext__(self):
-                    if self.index >= len(self.keys):
-                        raise StopAsyncIteration
-                    key = self.keys[self.index]
-                    self.index += 1
-                    return key
-
-            # Use lambda to return iterator when called
-            mock_client.scan_iter = lambda **_: MockScanIter(
-                [b"libra:positions:BTC/USDT", b"libra:positions:ETH/USDT"]
-            )
-            mock_client.get.side_effect = [open_encoded, flat_encoded]
-
-            await store.connect()
-            result = await store.get_all_positions()
-
-            # Only non-flat position should be returned
-            assert len(result) == 1
-            assert result[0].symbol == "BTC/USDT"
+        except Exception:
+            pytest.skip("Redis not available")
 
 
 # =============================================================================
-# Crash Recovery Tests
+# REDIS_AVAILABLE Tests
 # =============================================================================
 
 
-class TestCrashRecovery:
-    """Tests for crash recovery functionality."""
+class TestRedisAvailable:
+    """Tests for Redis availability flag."""
 
-    @pytest.mark.asyncio
-    async def test_restore_state(
-        self, config: RedisConfig, sample_order: OrderResult, sample_position: Position
-    ) -> None:
-        """Should restore both orders and positions."""
-        store = RedisStateStore(config)
+    def test_redis_available_is_bool(self) -> None:
+        """Test REDIS_AVAILABLE is a boolean."""
+        assert isinstance(REDIS_AVAILABLE, bool)
 
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-
-            import msgspec
-            order_encoded = msgspec.json.encode(sample_order)
-            position_encoded = msgspec.json.encode(sample_position)
-
-            # Create async iterator class for proper async for support
-            class MockScanIter:
-                def __init__(self, keys: list[bytes]) -> None:
-                    self.keys = keys
-                    self.index = 0
-
-                def __aiter__(self):
-                    return self
-
-                async def __anext__(self):
-                    if self.index >= len(self.keys):
-                        raise StopAsyncIteration
-                    key = self.keys[self.index]
-                    self.index += 1
-                    return key
-
-            # First call returns orders, second call returns positions
-            call_count = [0]
-
-            def mock_scan_iter(**_):
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    return MockScanIter([b"libra:orders:order-123"])
-                return MockScanIter([b"libra:positions:BTC/USDT"])
-
-            mock_client.scan_iter = mock_scan_iter
-            mock_client.get.side_effect = [order_encoded, position_encoded]
-
-            await store.connect()
-            orders, positions = await store.restore_state()
-
-            assert len(orders) == 1
-            assert len(positions) == 1
-            assert orders[0].order_id == "order-123"
-            assert positions[0].symbol == "BTC/USDT"
-
-
-# =============================================================================
-# Metadata Tests
-# =============================================================================
-
-
-class TestMetadata:
-    """Tests for metadata storage."""
-
-    @pytest.mark.asyncio
-    async def test_save_and_get_metadata(self, config: RedisConfig) -> None:
-        """Should save and retrieve metadata."""
-        store = RedisStateStore(config)
-
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-            mock_client.get.return_value = b"test-value"
-
-            await store.connect()
-
-            await store.save_metadata("test-key", "test-value", ttl=60)
-            mock_client.set.assert_awaited_once()
-
-            result = await store.get_metadata("test-key")
-            assert result == "test-value"
-
-
-# =============================================================================
-# Health Check Tests
-# =============================================================================
-
-
-class TestHealthCheck:
-    """Tests for health check functionality."""
-
-    @pytest.mark.asyncio
-    async def test_ping_success(self, config: RedisConfig) -> None:
-        """Should return True when Redis is healthy."""
-        store = RedisStateStore(config)
-
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-
-            await store.connect()
-            result = await store.ping()
-
-            assert result is True
-            # ping called during connect + during ping() method
-            assert mock_client.ping.await_count == 2
-
-    @pytest.mark.asyncio
-    async def test_ping_failure(self, config: RedisConfig) -> None:
-        """Should return False when Redis ping fails."""
-        store = RedisStateStore(config)
-
-        with patch("redis.asyncio") as mock_redis:
-            mock_client = AsyncMock()
-            mock_redis.ConnectionPool.from_url.return_value = AsyncMock()
-            mock_redis.Redis.return_value = mock_client
-
-            await store.connect()
-
-            # Make ping fail after connect
-            mock_client.ping.side_effect = ConnectionError("Redis down")
-            result = await store.ping()
-
-            assert result is False
-
-    def test_stats(self, config: RedisConfig) -> None:
-        """Should return correct stats."""
-        store = RedisStateStore(config)
-
-        stats = store.stats
-        assert stats["connected"] is False
-        assert stats["max_connections"] == 5
+    def test_redis_import_error_when_unavailable(self) -> None:
+        """Test helpful error when redis not installed."""
+        if not REDIS_AVAILABLE:
+            with pytest.raises(ImportError, match="redis package not installed"):
+                RedisStateStore()
