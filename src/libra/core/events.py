@@ -67,6 +67,9 @@ class EventType(Enum):
     # Signals (Priority: SIGNALS)
     SIGNAL = auto()
 
+    # Instrument Status (Priority: RISK) - Issue #110
+    INSTRUMENT_STATUS = auto()  # Trading halts, session changes
+
     # System (Priority: MARKET_DATA)
     GATEWAY_CONNECTED = auto()
     GATEWAY_DISCONNECTED = auto()
@@ -128,6 +131,8 @@ EVENT_PRIORITY_MAP: dict[EventType, Priority] = {
     EventType.CHILD_ORDER_FILLED: Priority.ORDERS,
     # Signal events
     EventType.SIGNAL: Priority.SIGNALS,
+    # Instrument Status events (Issue #110) - high priority for trading halts
+    EventType.INSTRUMENT_STATUS: Priority.RISK,
     # Market data events - lowest priority (highest volume)
     EventType.TICK: Priority.MARKET_DATA,
     EventType.BAR: Priority.MARKET_DATA,

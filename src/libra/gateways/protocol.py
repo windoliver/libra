@@ -121,6 +121,47 @@ class TriggerType(str, Enum):
     MARK_PRICE = "mark_price"  # Trigger on mark price (derivatives)
 
 
+class InstrumentStatus(str, Enum):
+    """
+    Instrument trading status (Issue #110).
+
+    Represents the current trading state of an instrument for:
+    - Exchange-initiated trading halts (circuit breakers, news)
+    - Pre-market and after-hours sessions
+    - Instrument suspension or delisting
+    - Maintenance windows
+    """
+
+    PRE_OPEN = "pre_open"  # Pre-market session (limited trading)
+    OPEN = "open"  # Normal trading
+    PAUSE = "pause"  # Temporary pause (auction, etc.)
+    HALT = "halt"  # Trading halted (circuit breaker, news)
+    CLOSE = "close"  # Market closed (no trading)
+    POST_CLOSE = "post_close"  # After-hours session (limited trading)
+    NOT_AVAILABLE = "not_available"  # Instrument not available
+    DELISTED = "delisted"  # Instrument delisted
+
+
+class HaltReason(str, Enum):
+    """
+    Reason for trading halt (Issue #110).
+
+    Common halt reasons across exchanges.
+    """
+
+    UNKNOWN = "unknown"
+    CIRCUIT_BREAKER = "circuit_breaker"  # Price movement limit
+    VOLATILITY = "volatility"  # Excessive volatility
+    NEWS_PENDING = "news_pending"  # Pending news announcement
+    NEWS_DISSEMINATION = "news_dissemination"  # News being released
+    ORDER_IMBALANCE = "order_imbalance"  # Order imbalance
+    REGULATORY = "regulatory"  # Regulatory halt
+    OPERATIONAL = "operational"  # Technical/operational issue
+    MAINTENANCE = "maintenance"  # Scheduled maintenance
+    IPO = "ipo"  # IPO-related halt
+    LULD = "luld"  # Limit Up Limit Down (US equities)
+
+
 # =============================================================================
 # Gateway Capabilities (Issue #24 - Extensible Protocol Design)
 # =============================================================================
@@ -763,6 +804,77 @@ class Balance(msgspec.Struct, frozen=True, gc=False):
         if self.total == 0:
             return Decimal("0")
         return (self.locked / self.total) * 100
+
+
+class InstrumentStatusEvent(msgspec.Struct, frozen=True, gc=False):
+    """
+    Instrument status change event (Issue #110).
+
+    Represents a change in trading status for an instrument:
+    - Trading halts (circuit breakers, news events)
+    - Pre-market / after-hours session transitions
+    - Instrument suspension or delisting
+    - Maintenance windows
+
+    Used by:
+    - RiskEngine: Block orders to halted instruments
+    - Strategies: Adjust behavior based on trading availability
+    - Monitoring: Track instrument state changes
+
+    Examples:
+        # Trading halt event
+        event = InstrumentStatusEvent(
+            symbol="AAPL",
+            status=InstrumentStatus.HALT,
+            previous_status=InstrumentStatus.OPEN,
+            reason=HaltReason.NEWS_PENDING,
+            halt_reason_text="Pending news announcement",
+            timestamp_ns=time.time_ns(),
+        )
+
+        # Market close event
+        event = InstrumentStatusEvent(
+            symbol="BTC/USDT",
+            status=InstrumentStatus.CLOSE,
+            previous_status=InstrumentStatus.OPEN,
+            timestamp_ns=time.time_ns(),
+        )
+    """
+
+    symbol: str  # Instrument symbol
+    status: InstrumentStatus  # New status
+    timestamp_ns: int  # When status changed
+
+    # Optional fields
+    previous_status: InstrumentStatus | None = None  # Previous status
+    reason: HaltReason | None = None  # Halt reason code
+    halt_reason_text: str | None = None  # Human-readable reason
+    resume_time_ns: int | None = None  # Expected resume timestamp (if known)
+    source: str | None = None  # Source of status update (exchange, etc.)
+
+    @property
+    def is_tradeable(self) -> bool:
+        """Check if instrument can be traded in current status."""
+        return self.status in (
+            InstrumentStatus.OPEN,
+            InstrumentStatus.PRE_OPEN,
+            InstrumentStatus.POST_CLOSE,
+        )
+
+    @property
+    def is_halted(self) -> bool:
+        """Check if trading is halted."""
+        return self.status in (
+            InstrumentStatus.HALT,
+            InstrumentStatus.PAUSE,
+            InstrumentStatus.NOT_AVAILABLE,
+            InstrumentStatus.DELISTED,
+        )
+
+    @property
+    def timestamp_sec(self) -> float:
+        """Timestamp in seconds (float) for compatibility."""
+        return self.timestamp_ns / 1_000_000_000
 
 
 # =============================================================================

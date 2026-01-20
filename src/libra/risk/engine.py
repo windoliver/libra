@@ -43,7 +43,7 @@ from libra.risk.rate_limiter import MultiRateLimiter, TokenBucketRateLimiter
 if TYPE_CHECKING:
     from libra.clients.data_client import Instrument
     from libra.core.message_bus import MessageBus
-    from libra.gateways.protocol import Order, Position
+    from libra.gateways.protocol import InstrumentStatus, InstrumentStatusEvent, Order, Position
 
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,9 @@ class RiskEngineConfig:
     # Modify rate limiting (separate from submit)
     max_modify_rate: int = 20  # modifications per second
 
+    # Instrument status check (Issue #110)
+    enable_instrument_status_check: bool = True  # Block orders to halted instruments
+
 
 # =============================================================================
 # Risk Engine
@@ -196,6 +199,9 @@ class RiskEngine:
 
     # Open orders tracking for self-trade prevention
     _open_orders: dict[str, list[Order]] = field(init=False, default_factory=dict)
+
+    # Instrument status tracking (Issue #110)
+    _instrument_status: dict[str, InstrumentStatus] = field(init=False, default_factory=dict)
 
     # Metrics
     _orders_checked: int = field(init=False, default=0)
@@ -361,6 +367,10 @@ class RiskEngine:
             self._check_trading_state(order),
         ]
 
+        # Instrument status check (Issue #110) - check early
+        if self.config.enable_instrument_status_check:
+            checks.append(self._check_instrument_status(order))
+
         # Self-trade prevention (if enabled)
         if self.config.enable_self_trade_prevention:
             checks.append(self._check_self_trade(order))
@@ -523,6 +533,36 @@ class RiskEngine:
                 )
 
         return RiskCheckResult(passed=True, check_name="trading_state")
+
+    def _check_instrument_status(self, order: Order) -> RiskCheckResult:
+        """
+        Check if instrument is tradeable (Issue #110).
+
+        Blocks orders to halted, paused, or unavailable instruments.
+        """
+        from libra.gateways.protocol import InstrumentStatus
+
+        status = self._instrument_status.get(order.symbol)
+
+        # No status tracked = assume OPEN (tradeable)
+        if status is None:
+            return RiskCheckResult(passed=True, check_name="instrument_status")
+
+        # Check if status allows trading
+        if status in (
+            InstrumentStatus.HALT,
+            InstrumentStatus.PAUSE,
+            InstrumentStatus.NOT_AVAILABLE,
+            InstrumentStatus.DELISTED,
+            InstrumentStatus.CLOSE,
+        ):
+            return RiskCheckResult(
+                passed=False,
+                check_name="instrument_status",
+                reason=f"Instrument {order.symbol} status: {status.value}",
+            )
+
+        return RiskCheckResult(passed=True, check_name="instrument_status")
 
     def _order_reduces_position(self, order: Order, position: Position) -> bool:
         """Check if order would reduce the current position."""
@@ -841,6 +881,101 @@ class RiskEngine:
         else:
             self._open_orders.pop(symbol, None)
 
+    def update_instrument_status(self, event: InstrumentStatusEvent) -> None:
+        """
+        Update instrument status from status event (Issue #110).
+
+        Call when receiving instrument status updates from data feed.
+
+        Args:
+            event: Instrument status event
+        """
+        from libra.gateways.protocol import InstrumentStatus
+
+        old_status = self._instrument_status.get(event.symbol)
+        self._instrument_status[event.symbol] = event.status
+
+        # Log significant changes
+        if old_status != event.status:
+            if event.status in (
+                InstrumentStatus.HALT,
+                InstrumentStatus.PAUSE,
+                InstrumentStatus.NOT_AVAILABLE,
+            ):
+                logger.warning(
+                    "Instrument %s now %s: %s",
+                    event.symbol,
+                    event.status.value,
+                    event.halt_reason_text or event.reason.value if event.reason else "unknown",
+                )
+            else:
+                logger.info(
+                    "Instrument %s status: %s -> %s",
+                    event.symbol,
+                    old_status.value if old_status else "unknown",
+                    event.status.value,
+                )
+
+        # Publish event
+        self._publish_event(
+            EventType.INSTRUMENT_STATUS,
+            {
+                "symbol": event.symbol,
+                "status": event.status.value,
+                "previous_status": old_status.value if old_status else None,
+                "reason": event.reason.value if event.reason else None,
+                "reason_text": event.halt_reason_text,
+            },
+        )
+
+    def set_instrument_status(self, symbol: str, status: InstrumentStatus) -> None:
+        """
+        Directly set instrument status (Issue #110).
+
+        Simpler alternative to update_instrument_status for testing
+        or when full event details aren't available.
+
+        Args:
+            symbol: Instrument symbol
+            status: New status
+        """
+        from libra.gateways.protocol import InstrumentStatus
+
+        old_status = self._instrument_status.get(symbol)
+        self._instrument_status[symbol] = status
+
+        if old_status != status:
+            logger.info(
+                "Instrument %s status: %s -> %s",
+                symbol,
+                old_status.value if old_status else "unknown",
+                status.value,
+            )
+
+    def get_instrument_status(self, symbol: str) -> InstrumentStatus | None:
+        """
+        Get current instrument status (Issue #110).
+
+        Args:
+            symbol: Instrument symbol
+
+        Returns:
+            Current status or None if not tracked
+        """
+        return self._instrument_status.get(symbol)
+
+    def clear_instrument_status(self, symbol: str | None = None) -> None:
+        """
+        Clear instrument status tracking (Issue #110).
+
+        Args:
+            symbol: Clear for specific symbol, or all if None
+        """
+        if symbol is None:
+            self._instrument_status.clear()
+        else:
+            self._instrument_status.pop(symbol, None)
+
     def update_equity(self, equity: Decimal) -> None:
         """
         Update equity and track peak for drawdown.
@@ -930,6 +1065,11 @@ class RiskEngine:
             "daily_pnl": f"{float(self._daily_pnl):.2%}",
             "positions_tracked": len(self._positions),
             "open_orders_tracked": sum(len(v) for v in self._open_orders.values()),
+            "instruments_tracked": len(self._instrument_status),
+            "halted_instruments": [
+                s for s, status in self._instrument_status.items()
+                if status.value in ("halt", "pause", "not_available", "delisted")
+            ],
             "circuit_breaker": self._circuit_breaker.get_status(),
             "avg_check_latency_us": round(avg_latency_us, 2),
             "p99_check_latency_us": round(p99_latency_us, 2),
@@ -938,6 +1078,7 @@ class RiskEngine:
                 "price_collar": self.config.enable_price_collar,
                 "price_collar_pct": float(self.config.price_collar_pct),
                 "precision_validation": self.config.enable_precision_validation,
+                "instrument_status_check": self.config.enable_instrument_status_check,
             },
         }
 

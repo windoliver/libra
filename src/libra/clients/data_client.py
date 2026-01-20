@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from decimal import Decimal
 
-    from libra.gateways.protocol import OrderBook, Tick
+    from libra.gateways.protocol import InstrumentStatusEvent, OrderBook, Tick
     from libra.strategies.protocol import Bar
 
 
@@ -317,6 +317,52 @@ class DataClient(Protocol):
 
         Yields:
             OrderBook objects with current bids/asks.
+        """
+        ...
+
+    # -------------------------------------------------------------------------
+    # Instrument Status Subscriptions (Issue #110)
+    # -------------------------------------------------------------------------
+
+    async def subscribe_instrument_status(self, symbol: str) -> None:
+        """
+        Subscribe to instrument status updates (Issue #110).
+
+        Receives updates for trading halts, session changes, and other
+        instrument state changes via stream_instrument_status().
+
+        Args:
+            symbol: Trading pair (e.g., "AAPL", "BTC/USDT")
+
+        Note:
+            Not all data sources support instrument status updates.
+            Raises NotImplementedError if not supported.
+        """
+        ...
+
+    async def unsubscribe_instrument_status(self, symbol: str) -> None:
+        """
+        Unsubscribe from instrument status updates.
+
+        Args:
+            symbol: Trading pair to unsubscribe from.
+        """
+        ...
+
+    def stream_instrument_status(self) -> AsyncIterator[InstrumentStatusEvent]:
+        """
+        Stream instrument status updates for subscribed symbols (Issue #110).
+
+        Yields status events for trading halts, session changes,
+        and other instrument state changes.
+
+        Yields:
+            InstrumentStatusEvent objects on status changes.
+
+        Example:
+            async for event in client.stream_instrument_status():
+                if event.status == InstrumentStatus.HALT:
+                    print(f"{event.symbol} halted: {event.halt_reason_text}")
         """
         ...
 
