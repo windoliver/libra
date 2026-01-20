@@ -70,6 +70,16 @@ from libra.execution.adaptive import (
     urgency_from_level,
 )
 
+# Order Emulator (Issue #106)
+from libra.execution.emulator import (
+    BracketOrder,
+    EmulatedOrder,
+    EmulatedOrderState,
+    EmulatorConfig,
+    EmulatorStats,
+    OrderEmulator,
+)
+
 # Execution Engine
 from libra.execution.engine import (
     ActiveExecution,
@@ -136,6 +146,13 @@ __all__ = [
     "ChildOrder",
     "ExecutionProgress",
     "ExecutionMetrics",
+    # Order Emulator (Issue #106)
+    "OrderEmulator",
+    "EmulatorConfig",
+    "EmulatorStats",
+    "EmulatedOrder",
+    "EmulatedOrderState",
+    "BracketOrder",
     # Execution Engine
     "ExecutionEngine",
     "ExecutionEngineConfig",
