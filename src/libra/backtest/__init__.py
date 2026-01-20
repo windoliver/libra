@@ -106,6 +106,13 @@ from libra.backtest.result import (
     BacktestResult,
     BacktestSummary,
 )
+from libra.backtest.vectorized import (
+    VectorizedBacktest,
+    VectorizedConfig,
+    VectorizedResult,
+    generate_moving_average_signals,
+    generate_rsi_signals,
+)
 
 
 __all__ = [
@@ -141,4 +148,10 @@ __all__ = [
     "PipelineResult",
     "compute_factor",
     "run_factors",
+    # Vectorized (Issue #104)
+    "VectorizedBacktest",
+    "VectorizedConfig",
+    "VectorizedResult",
+    "generate_moving_average_signals",
+    "generate_rsi_signals",
 ]
