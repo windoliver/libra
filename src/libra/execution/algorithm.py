@@ -32,7 +32,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from libra.gateways.protocol import Order, OrderResult, OrderSide, OrderType
+from libra.gateways.protocol import Order, OrderResult, OrderSide, OrderType, TimeInForce
 
 
 if TYPE_CHECKING:
@@ -508,6 +508,272 @@ class BaseExecAlgorithm(ABC):
             child = self._spawn_limit(quantity, price)
 
         return await self._submit_child(child)
+
+    # -------------------------------------------------------------------------
+    # Public Spawn Helper Methods (Issue #114)
+    # -------------------------------------------------------------------------
+
+    async def spawn_market(
+        self,
+        side: OrderSide,
+        quantity: Decimal,
+        reduce_only: bool = False,
+    ) -> OrderResult | None:
+        """
+        Spawn a market child order with automatic parent tracking (Issue #114).
+
+        Creates and immediately submits a market order as a child of the
+        current parent order. Tracks parent-child relationship and updates
+        execution progress automatically.
+
+        Args:
+            side: Order side (can differ from parent for hedging/complex strategies)
+            quantity: Quantity to execute
+            reduce_only: If True, only reduces existing position
+
+        Returns:
+            OrderResult if submission successful, None if cancelled or failed
+
+        Example:
+            # In a TWAP algorithm
+            result = await self.spawn_market(
+                side=OrderSide.BUY,
+                quantity=Decimal("0.1"),
+            )
+        """
+        if self._parent_order is None:
+            raise RuntimeError("No parent order set - call execute() first")
+
+        if self._execution_client is None:
+            raise RuntimeError("Execution client not set")
+
+        if self._cancelled:
+            self.log.debug("Skipping spawn_market - execution cancelled")
+            return None
+
+        self._spawn_sequence += 1
+        parent_id = self._parent_order.client_order_id or "unknown"
+        child_id = f"{parent_id}-{self._spawn_sequence}"
+
+        child_order = Order(
+            symbol=self._parent_order.symbol,
+            side=side,
+            order_type=OrderType.MARKET,
+            amount=quantity,
+            reduce_only=reduce_only,
+            client_order_id=child_id,
+            parent_order_id=parent_id,
+        )
+
+        # Track child order
+        child = ChildOrder(
+            order=child_order,
+            spawn_id=parent_id,
+            spawn_sequence=self._spawn_sequence,
+        )
+        self._child_orders.append(child)
+        if self._progress:
+            self._progress.num_children_spawned += 1
+
+        self.log.debug(
+            "Spawning market child #%d: %s %s %s",
+            self._spawn_sequence,
+            side.value,
+            quantity,
+            self._parent_order.symbol,
+        )
+
+        try:
+            result = await self._execution_client.submit_order(child_order)
+            self._update_progress_from_fill(result)
+            return result
+        except Exception as e:
+            self.log.error("Failed to submit market child order: %s", e)
+            return None
+
+    async def spawn_limit(
+        self,
+        side: OrderSide,
+        quantity: Decimal,
+        price: Decimal,
+        time_in_force: TimeInForce = TimeInForce.GTC,
+        post_only: bool = False,
+        reduce_only: bool = False,
+    ) -> OrderResult | None:
+        """
+        Spawn a limit child order with automatic parent tracking (Issue #114).
+
+        Creates and immediately submits a limit order as a child of the
+        current parent order. Supports time-in-force and post-only options.
+
+        Args:
+            side: Order side (can differ from parent)
+            quantity: Quantity to execute
+            price: Limit price
+            time_in_force: Order duration (GTC, IOC, FOK, etc.)
+            post_only: If True, only posts as maker (no taker)
+            reduce_only: If True, only reduces existing position
+
+        Returns:
+            OrderResult if submission successful, None if cancelled or failed
+
+        Example:
+            # Place a limit order with IOC
+            result = await self.spawn_limit(
+                side=OrderSide.BUY,
+                quantity=Decimal("0.1"),
+                price=Decimal("50000"),
+                time_in_force=TimeInForce.IOC,
+            )
+        """
+        if self._parent_order is None:
+            raise RuntimeError("No parent order set - call execute() first")
+
+        if self._execution_client is None:
+            raise RuntimeError("Execution client not set")
+
+        if self._cancelled:
+            self.log.debug("Skipping spawn_limit - execution cancelled")
+            return None
+
+        self._spawn_sequence += 1
+        parent_id = self._parent_order.client_order_id or "unknown"
+        child_id = f"{parent_id}-{self._spawn_sequence}"
+
+        child_order = Order(
+            symbol=self._parent_order.symbol,
+            side=side,
+            order_type=OrderType.LIMIT,
+            amount=quantity,
+            price=price,
+            time_in_force=time_in_force,
+            post_only=post_only,
+            reduce_only=reduce_only,
+            client_order_id=child_id,
+            parent_order_id=parent_id,
+        )
+
+        # Track child order
+        child = ChildOrder(
+            order=child_order,
+            spawn_id=parent_id,
+            spawn_sequence=self._spawn_sequence,
+        )
+        self._child_orders.append(child)
+        if self._progress:
+            self._progress.num_children_spawned += 1
+
+        self.log.debug(
+            "Spawning limit child #%d: %s %s %s @ %s (%s)",
+            self._spawn_sequence,
+            side.value,
+            quantity,
+            self._parent_order.symbol,
+            price,
+            time_in_force.value,
+        )
+
+        try:
+            result = await self._execution_client.submit_order(child_order)
+            self._update_progress_from_fill(result)
+            return result
+        except Exception as e:
+            self.log.error("Failed to submit limit child order: %s", e)
+            return None
+
+    async def spawn_market_to_limit(
+        self,
+        side: OrderSide,
+        quantity: Decimal,
+        reduce_only: bool = False,
+    ) -> OrderResult | None:
+        """
+        Spawn a market-to-limit child order (Issue #114).
+
+        Submits as a market order that converts to a limit order at the
+        fill price. This is useful for getting a fill while potentially
+        improving on the price through the limit conversion.
+
+        Note: Not all exchanges support true market-to-limit orders.
+        For unsupported exchanges, this falls back to a regular market order.
+
+        Args:
+            side: Order side (can differ from parent)
+            quantity: Quantity to execute
+            reduce_only: If True, only reduces existing position
+
+        Returns:
+            OrderResult if submission successful, None if cancelled or failed
+
+        Example:
+            result = await self.spawn_market_to_limit(
+                side=OrderSide.BUY,
+                quantity=Decimal("0.1"),
+            )
+        """
+        if self._parent_order is None:
+            raise RuntimeError("No parent order set - call execute() first")
+
+        if self._execution_client is None:
+            raise RuntimeError("Execution client not set")
+
+        if self._cancelled:
+            self.log.debug("Skipping spawn_market_to_limit - execution cancelled")
+            return None
+
+        self._spawn_sequence += 1
+        parent_id = self._parent_order.client_order_id or "unknown"
+        child_id = f"{parent_id}-{self._spawn_sequence}"
+
+        # Market-to-limit is implemented as MARKET with IOC
+        # Some exchanges convert unfilled portion to limit at fill price
+        # For full compatibility, we use MARKET order type
+        child_order = Order(
+            symbol=self._parent_order.symbol,
+            side=side,
+            order_type=OrderType.MARKET,
+            amount=quantity,
+            reduce_only=reduce_only,
+            time_in_force=TimeInForce.IOC,  # IOC gives market-like behavior
+            client_order_id=child_id,
+            parent_order_id=parent_id,
+        )
+
+        # Track child order
+        child = ChildOrder(
+            order=child_order,
+            spawn_id=parent_id,
+            spawn_sequence=self._spawn_sequence,
+        )
+        self._child_orders.append(child)
+        if self._progress:
+            self._progress.num_children_spawned += 1
+
+        self.log.debug(
+            "Spawning market-to-limit child #%d: %s %s %s",
+            self._spawn_sequence,
+            side.value,
+            quantity,
+            self._parent_order.symbol,
+        )
+
+        try:
+            result = await self._execution_client.submit_order(child_order)
+            self._update_progress_from_fill(result)
+            return result
+        except Exception as e:
+            self.log.error("Failed to submit market-to-limit child order: %s", e)
+            return None
+
+    @property
+    def child_count(self) -> int:
+        """Number of child orders spawned (Issue #114)."""
+        return self._spawn_sequence
+
+    @property
+    def child_orders(self) -> list[ChildOrder]:
+        """List of all child orders spawned (Issue #114)."""
+        return self._child_orders.copy()
 
     def _update_progress_from_fill(self, result: OrderResult) -> None:
         """Update progress tracking from an order result."""
