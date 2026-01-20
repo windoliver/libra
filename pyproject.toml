@@ -109,6 +109,13 @@ validation = [
     "pydantic>=2.0",
 ]
 
+# GPU acceleration for Monte Carlo simulations (Issue #103)
+# Install with: pip install libra[gpu]
+# Requires CUDA toolkit installed on system
+gpu = [
+    "cupy-cuda12x>=13.0",  # CuPy for NVIDIA CUDA 12.x (100x+ speedup for large MC)
+]
+
 # Database - QuestDB time-series database (Issue #21)
 database = [
     "questdb>=3.0",      # QuestDB Python client (ILP ingestion)

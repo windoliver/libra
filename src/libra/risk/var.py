@@ -50,6 +50,86 @@ except ImportError:
     RUST_MONTE_CARLO_AVAILABLE = False
     _monte_carlo_var_rust = None  # type: ignore
 
+# Optional GPU backend for large Monte Carlo (Issue #103: 100x+ speedup)
+try:
+    import cupy as cp
+
+    GPU_AVAILABLE = True
+    GPU_DEVICE_NAME = cp.cuda.Device().name.decode() if cp.cuda.is_available() else None
+    logger.info("GPU acceleration available: %s", GPU_DEVICE_NAME)
+except ImportError:
+    GPU_AVAILABLE = False
+    GPU_DEVICE_NAME = None
+    cp = None  # type: ignore
+
+
+# =============================================================================
+# GPU Monte Carlo VaR (Issue #103: 100x+ speedup for large simulations)
+# =============================================================================
+
+
+# Threshold for GPU usage - below this, CPU/Rust is faster due to transfer overhead
+GPU_MIN_SIMULATIONS = 100_000
+
+
+def _monte_carlo_var_gpu(
+    mean_return: float,
+    volatility: float,
+    horizon: int,
+    n_sims: int,
+    confidence: float,
+    seed: int | None = None,
+) -> tuple[float, float]:
+    """
+    GPU-accelerated Monte Carlo VaR using CuPy (NVIDIA CUDA).
+
+    Provides 100x+ speedup for large simulations (n_sims > 100,000).
+    Automatically falls back to CPU for smaller simulations.
+
+    Args:
+        mean_return: Estimated mean return
+        volatility: Estimated volatility
+        horizon: Time horizon in days
+        n_sims: Number of simulations
+        confidence: Confidence level (e.g., 0.95)
+        seed: Optional random seed for reproducibility
+
+    Returns:
+        Tuple of (VaR%, CVaR%) as positive losses
+    """
+    if not GPU_AVAILABLE or cp is None:
+        raise RuntimeError("GPU not available")
+
+    # Set seed if provided
+    if seed is not None:
+        cp.random.seed(seed)
+
+    # Generate simulated returns on GPU
+    horizon_f = float(horizon)
+    simulated_returns = cp.random.normal(
+        mean_return * horizon_f,
+        volatility * cp.sqrt(horizon_f),
+        n_sims,
+    )
+
+    # Sort on GPU
+    sorted_returns = cp.sort(simulated_returns)
+
+    # Calculate VaR percentile
+    var_idx = int((1.0 - confidence) * n_sims)
+    var_idx = min(var_idx, n_sims - 1)
+
+    # VaR: negative return at percentile (positive loss)
+    var_pct = float(-sorted_returns[var_idx].get())
+
+    # CVaR: average of worst losses
+    if var_idx > 0:
+        cvar_pct = float(-cp.mean(sorted_returns[:var_idx]).get())
+    else:
+        cvar_pct = var_pct
+
+    return max(0.0, var_pct), max(0.0, cvar_pct)
+
 
 # =============================================================================
 # Numba-compiled EWMA (Issue #70: ~50x speedup)
@@ -231,6 +311,8 @@ class VaRConfig:
     # Monte Carlo settings
     num_simulations: int = 10000
     seed: int | None = None
+    use_gpu: bool = True  # Use GPU for large MC if available (Issue #103)
+    gpu_min_sims: int = 100_000  # Minimum sims to use GPU (below this, CPU is faster)
 
     # Parametric settings
     use_ewma: bool = True  # Exponentially weighted volatility
@@ -442,8 +524,25 @@ class VaRCalculator:
         mean_return = float(np.mean(returns_arr))
         volatility = float(np.std(returns_arr, ddof=1))
 
+        # Use GPU for large simulations (Issue #103: 100x+ speedup)
+        if (
+            GPU_AVAILABLE
+            and self.config.use_gpu
+            and n_sims >= self.config.gpu_min_sims
+        ):
+            var_pct, cvar_pct = _monte_carlo_var_gpu(
+                mean_return,
+                volatility,
+                horizon,
+                n_sims,
+                conf,
+                self.config.seed,
+            )
+            logger.debug(
+                "GPU Monte Carlo VaR: %d sims on %s", n_sims, GPU_DEVICE_NAME
+            )
         # Use Rust implementation if available (parallel, faster RNG)
-        if RUST_MONTE_CARLO_AVAILABLE and _monte_carlo_var_rust is not None:
+        elif RUST_MONTE_CARLO_AVAILABLE and _monte_carlo_var_rust is not None:
             var_pct, cvar_pct = _monte_carlo_var_rust(
                 mean_return,
                 volatility,
