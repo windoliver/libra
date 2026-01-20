@@ -71,6 +71,9 @@ from libra.data.cache import (
 
 # Storage
 from libra.data.storage import (
+    BCOLZ_AVAILABLE,
+    BcolzBackend,
+    BcolzDataStore,
     InMemoryBackend,
     ParquetBackend,
     StorageBackend,
@@ -142,6 +145,9 @@ __all__ = [
     "DataFrameCache",
     "LRUCache",
     # Storage
+    "BCOLZ_AVAILABLE",
+    "BcolzBackend",
+    "BcolzDataStore",
     "InMemoryBackend",
     "ParquetBackend",
     "StorageBackend",

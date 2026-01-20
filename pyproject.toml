@@ -116,6 +116,12 @@ gpu = [
     "cupy-cuda12x>=13.0",  # CuPy for NVIDIA CUDA 12.x (100x+ speedup for large MC)
 ]
 
+# Bcolz columnar storage (Issue #105: Zipline-style data bundles)
+# Install with: pip install libra[bcolz]
+bcolz = [
+    "bcolz-zipline>=1.2.6",  # Maintained fork of bcolz for Zipline
+]
+
 # Database - QuestDB time-series database (Issue #21)
 database = [
     "questdb>=3.0",      # QuestDB Python client (ILP ingestion)

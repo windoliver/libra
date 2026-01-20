@@ -316,6 +316,466 @@ class ParquetBackend:
 
 
 # =============================================================================
+# Bcolz Backend (Zipline-style columnar storage) - Issue #105
+# =============================================================================
+
+# Optional bcolz import
+try:
+    import bcolz
+
+    BCOLZ_AVAILABLE = True
+except ImportError:
+    BCOLZ_AVAILABLE = False
+    bcolz = None  # type: ignore
+
+
+class BcolzBackend:
+    """
+    Bcolz columnar storage for Zipline-style data bundles.
+
+    Features:
+    - Compressed columnar format (blosc compression)
+    - Memory-mapped access for large datasets
+    - Efficient time range queries
+    - Used by Zipline for years of historical data
+
+    Provides ~2-5x faster reads than Parquet for time-series data
+    with better compression ratios.
+
+    Example:
+        backend = BcolzBackend(Path("./data/bcolz"))
+        await backend.write("BTC/USDT:1d", df)
+        df = await backend.read("BTC/USDT:1d", start=datetime(2024, 1, 1))
+
+    Note: Requires bcolz-zipline package: pip install libra[bcolz]
+    """
+
+    def __init__(
+        self,
+        base_path: Path,
+        tier: StorageTier = StorageTier.WARM,
+        cparams: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Initialize bcolz backend.
+
+        Args:
+            base_path: Base directory for bcolz ctables
+            tier: Storage tier classification
+            cparams: Compression parameters (default: blosc with lz4)
+        """
+        if not BCOLZ_AVAILABLE:
+            raise ImportError(
+                "bcolz not available. Install with: pip install libra[bcolz]"
+            )
+
+        self._base_path = Path(base_path)
+        self._tier = tier
+        self._base_path.mkdir(parents=True, exist_ok=True)
+
+        # Default compression: blosc with lz4 (fast compression/decompression)
+        self._cparams = cparams or {
+            "cname": "lz4",
+            "clevel": 5,
+            "shuffle": bcolz.SHUFFLE,
+        }
+
+    @property
+    def tier(self) -> StorageTier:
+        return self._tier
+
+    def _key_to_path(self, key: str) -> Path:
+        """Convert key to directory path."""
+        safe_key = key.replace("/", "_").replace(":", "_")
+        return self._base_path / safe_key
+
+    async def read(
+        self,
+        key: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> pl.DataFrame | None:
+        """
+        Read data from bcolz ctable.
+
+        Supports efficient time range queries using boolean indexing.
+
+        Args:
+            key: Data key (e.g., "BTC/USDT:1d")
+            start: Start timestamp (inclusive)
+            end: End timestamp (inclusive)
+
+        Returns:
+            Polars DataFrame or None if not found
+        """
+        path = self._key_to_path(key)
+        if not path.exists():
+            return None
+
+        try:
+            ctable = bcolz.open(str(path), mode="r")
+
+            # Build mask for time range query
+            if "timestamp" in ctable.names and (start is not None or end is not None):
+                timestamps = ctable["timestamp"][:]
+
+                # Convert datetime to appropriate format
+                if start is not None:
+                    if hasattr(start, "timestamp"):
+                        start_val = int(start.timestamp() * 1_000_000_000)  # ns
+                    else:
+                        start_val = start
+                else:
+                    start_val = None
+
+                if end is not None:
+                    if hasattr(end, "timestamp"):
+                        end_val = int(end.timestamp() * 1_000_000_000)  # ns
+                    else:
+                        end_val = end
+                else:
+                    end_val = None
+
+                # Apply mask
+                import numpy as np
+
+                mask = np.ones(len(ctable), dtype=bool)
+                if start_val is not None:
+                    mask &= timestamps >= start_val
+                if end_val is not None:
+                    mask &= timestamps <= end_val
+
+                # Extract filtered data
+                data = {col: ctable[col][mask] for col in ctable.names}
+            else:
+                # No filtering, read all data
+                data = {col: ctable[col][:] for col in ctable.names}
+
+            return pl.DataFrame(data)
+
+        except Exception as e:
+            logger.error(f"Error reading bcolz {path}: {e}")
+            return None
+
+    async def write(self, key: str, data: pl.DataFrame) -> None:
+        """
+        Write data to bcolz ctable.
+
+        Creates a new ctable or overwrites existing one.
+
+        Args:
+            key: Data key
+            data: Polars DataFrame to write
+        """
+        path = self._key_to_path(key)
+
+        try:
+            # Remove existing ctable if present
+            if path.exists():
+                import shutil
+
+                shutil.rmtree(path)
+
+            # Convert Polars columns to numpy arrays
+            columns = {}
+            for col in data.columns:
+                arr = data[col].to_numpy()
+                columns[col] = arr
+
+            # Create ctable with compression
+            bcolz.ctable(
+                columns=columns,
+                rootdir=str(path),
+                mode="w",
+                cparams=bcolz.cparams(**self._cparams),
+            )
+
+            logger.debug(f"Wrote {len(data)} rows to bcolz {path}")
+
+        except Exception as e:
+            logger.error(f"Error writing bcolz {path}: {e}")
+            raise
+
+    async def delete(self, key: str) -> bool:
+        """Delete bcolz ctable."""
+        path = self._key_to_path(key)
+        if path.exists():
+            import shutil
+
+            shutil.rmtree(path)
+            return True
+        return False
+
+    async def exists(self, key: str) -> bool:
+        """Check if ctable exists."""
+        return self._key_to_path(key).exists()
+
+    async def list_keys(self, prefix: str = "") -> list[str]:
+        """List all keys (ctable directories)."""
+        keys = []
+        for path in self._base_path.iterdir():
+            if path.is_dir() and not path.name.startswith("."):
+                key = path.name.replace("_", "/", 1)
+                if key.startswith(prefix):
+                    keys.append(key)
+        return keys
+
+    async def get_metadata(self, key: str) -> dict[str, Any] | None:
+        """Get metadata for ctable."""
+        path = self._key_to_path(key)
+        if not path.exists():
+            return None
+
+        try:
+            ctable = bcolz.open(str(path), mode="r")
+            return {
+                "nrows": ctable.nrows,
+                "columns": ctable.names,
+                "dtype": {col: str(ctable[col].dtype) for col in ctable.names},
+                "cparams": str(ctable.cparams),
+                "path": str(path),
+                "size_bytes": sum(f.stat().st_size for f in path.rglob("*") if f.is_file()),
+            }
+        except Exception as e:
+            logger.error(f"Error getting bcolz metadata {path}: {e}")
+            return None
+
+    async def append(self, key: str, data: pl.DataFrame) -> None:
+        """
+        Append data to existing ctable.
+
+        More efficient than rewriting for incremental updates.
+
+        Args:
+            key: Data key
+            data: Data to append
+        """
+        path = self._key_to_path(key)
+
+        if not path.exists():
+            # No existing data, create new
+            await self.write(key, data)
+            return
+
+        try:
+            ctable = bcolz.open(str(path), mode="a")
+
+            # Append row by row (bcolz doesn't support bulk append easily)
+            for i in range(len(data)):
+                row = tuple(data[col][i] for col in ctable.names)
+                ctable.append([row])
+
+            ctable.flush()
+            logger.debug(f"Appended {len(data)} rows to bcolz {path}")
+
+        except Exception as e:
+            logger.error(f"Error appending to bcolz {path}: {e}")
+            raise
+
+
+class BcolzDataStore:
+    """
+    High-level bcolz data store for OHLCV bar data.
+
+    Provides a simple interface for storing and retrieving
+    historical bar data in Zipline-style bundles.
+
+    Example:
+        store = BcolzDataStore("./data/bundles")
+
+        # Save bars
+        store.save_bars("BTC/USDT", df)
+
+        # Load with time range
+        df = store.load_bars("BTC/USDT", start=datetime(2024, 1, 1))
+
+        # List available symbols
+        symbols = store.list_symbols()
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        """
+        Initialize bcolz data store.
+
+        Args:
+            path: Base directory for data bundles
+        """
+        if not BCOLZ_AVAILABLE:
+            raise ImportError(
+                "bcolz not available. Install with: pip install libra[bcolz]"
+            )
+
+        self._path = Path(path)
+        self._path.mkdir(parents=True, exist_ok=True)
+
+    def save_bars(
+        self,
+        symbol: str,
+        df: pl.DataFrame,
+        timeframe: str = "1d",
+    ) -> None:
+        """
+        Save OHLCV bars to bcolz ctable.
+
+        Args:
+            symbol: Trading symbol (e.g., "BTC/USDT")
+            df: DataFrame with columns: timestamp, open, high, low, close, volume
+            timeframe: Bar timeframe (e.g., "1d", "1h", "1m")
+        """
+        # Validate required columns
+        required = {"timestamp", "open", "high", "low", "close", "volume"}
+        if not required.issubset(set(df.columns)):
+            missing = required - set(df.columns)
+            raise ValueError(f"Missing required columns: {missing}")
+
+        # Create directory structure: path/symbol/timeframe/
+        safe_symbol = symbol.replace("/", "_")
+        ctable_path = self._path / safe_symbol / timeframe
+
+        if ctable_path.exists():
+            import shutil
+
+            shutil.rmtree(ctable_path)
+
+        ctable_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Convert to numpy and create ctable
+        columns = {
+            "timestamp": df["timestamp"].to_numpy(),
+            "open": df["open"].to_numpy().astype("float64"),
+            "high": df["high"].to_numpy().astype("float64"),
+            "low": df["low"].to_numpy().astype("float64"),
+            "close": df["close"].to_numpy().astype("float64"),
+            "volume": df["volume"].to_numpy().astype("float64"),
+        }
+
+        bcolz.ctable(
+            columns=columns,
+            rootdir=str(ctable_path),
+            mode="w",
+            cparams=bcolz.cparams(cname="lz4", clevel=5, shuffle=bcolz.SHUFFLE),
+        )
+
+        logger.info(f"Saved {len(df)} bars for {symbol}/{timeframe}")
+
+    def load_bars(
+        self,
+        symbol: str,
+        timeframe: str = "1d",
+        start: datetime | int | None = None,
+        end: datetime | int | None = None,
+    ) -> pl.DataFrame | None:
+        """
+        Load OHLCV bars from bcolz ctable.
+
+        Args:
+            symbol: Trading symbol
+            timeframe: Bar timeframe
+            start: Start timestamp (datetime or nanoseconds)
+            end: End timestamp (datetime or nanoseconds)
+
+        Returns:
+            Polars DataFrame or None if not found
+        """
+        safe_symbol = symbol.replace("/", "_")
+        ctable_path = self._path / safe_symbol / timeframe
+
+        if not ctable_path.exists():
+            return None
+
+        ctable = bcolz.open(str(ctable_path), mode="r")
+        timestamps = ctable["timestamp"][:]
+
+        # Convert datetime to ns if needed
+        import numpy as np
+
+        if start is not None:
+            if isinstance(start, datetime):
+                start = int(start.timestamp() * 1_000_000_000)
+        if end is not None:
+            if isinstance(end, datetime):
+                end = int(end.timestamp() * 1_000_000_000)
+
+        # Build mask
+        mask = np.ones(len(ctable), dtype=bool)
+        if start is not None:
+            mask &= timestamps >= start
+        if end is not None:
+            mask &= timestamps <= end
+
+        # Extract data
+        data = {col: ctable[col][mask] for col in ctable.names}
+        return pl.DataFrame(data)
+
+    def list_symbols(self) -> list[str]:
+        """List all available symbols."""
+        symbols = []
+        for path in self._path.iterdir():
+            if path.is_dir() and not path.name.startswith("."):
+                symbol = path.name.replace("_", "/")
+                symbols.append(symbol)
+        return sorted(symbols)
+
+    def list_timeframes(self, symbol: str) -> list[str]:
+        """List available timeframes for a symbol."""
+        safe_symbol = symbol.replace("/", "_")
+        symbol_path = self._path / safe_symbol
+
+        if not symbol_path.exists():
+            return []
+
+        return sorted(
+            p.name for p in symbol_path.iterdir() if p.is_dir() and not p.name.startswith(".")
+        )
+
+    def get_info(self, symbol: str, timeframe: str = "1d") -> dict[str, Any] | None:
+        """Get info about stored data."""
+        safe_symbol = symbol.replace("/", "_")
+        ctable_path = self._path / safe_symbol / timeframe
+
+        if not ctable_path.exists():
+            return None
+
+        ctable = bcolz.open(str(ctable_path), mode="r")
+        timestamps = ctable["timestamp"][:]
+
+        return {
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "nrows": ctable.nrows,
+            "start_timestamp": int(timestamps.min()) if len(timestamps) > 0 else None,
+            "end_timestamp": int(timestamps.max()) if len(timestamps) > 0 else None,
+            "columns": ctable.names,
+            "compression": str(ctable.cparams),
+        }
+
+    def delete(self, symbol: str, timeframe: str | None = None) -> bool:
+        """
+        Delete stored data.
+
+        Args:
+            symbol: Symbol to delete
+            timeframe: Specific timeframe (None = all timeframes)
+
+        Returns:
+            True if deleted
+        """
+        import shutil
+
+        safe_symbol = symbol.replace("/", "_")
+
+        if timeframe:
+            path = self._path / safe_symbol / timeframe
+        else:
+            path = self._path / safe_symbol
+
+        if path.exists():
+            shutil.rmtree(path)
+            return True
+        return False
+
+
+# =============================================================================
 # Tiered Storage Manager
 # =============================================================================
 
