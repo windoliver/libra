@@ -51,6 +51,8 @@ class Instrument(msgspec.Struct, frozen=True, gc=False):
         exchange: Exchange identifier (e.g., "binance")
         lot_size: Minimum order size increment
         tick_size: Minimum price increment
+        min_quantity: Minimum order quantity (Issue #113)
+        max_quantity: Maximum order quantity (Issue #113)
         min_notional: Minimum order value (e.g., $10)
         contract_type: "spot", "perpetual", "future", "option"
         is_active: Whether trading is currently enabled
@@ -63,6 +65,8 @@ class Instrument(msgspec.Struct, frozen=True, gc=False):
             exchange="binance",
             lot_size=Decimal("0.00001"),
             tick_size=Decimal("0.01"),
+            min_quantity=Decimal("0.00001"),
+            max_quantity=Decimal("1000"),
             min_notional=Decimal("10"),
             contract_type="spot",
             is_active=True,
@@ -77,6 +81,8 @@ class Instrument(msgspec.Struct, frozen=True, gc=False):
     # Trading constraints (use Any to avoid Decimal import complexity)
     lot_size: Any  # Decimal - minimum order size increment
     tick_size: Any  # Decimal - minimum price increment
+    min_quantity: Any | None = None  # Decimal - minimum order quantity (Issue #113)
+    max_quantity: Any | None = None  # Decimal - maximum order quantity (Issue #113)
     min_notional: Any | None = None  # Decimal - minimum order value
 
     # Instrument type

@@ -525,6 +525,11 @@ class CCXTDataClient(BaseDataClient):
     async def _load_instruments(self) -> None:
         """Load and cache instrument information."""
         for symbol, market in self._exchange.markets.items():
+            # Extract limits from CCXT market info
+            limits = market.get("limits", {})
+            amount_limits = limits.get("amount", {})
+            cost_limits = limits.get("cost", {})
+
             instrument = Instrument(
                 symbol=symbol,
                 base=market.get("base", ""),
@@ -532,7 +537,10 @@ class CCXTDataClient(BaseDataClient):
                 exchange=self._exchange_id,
                 lot_size=Decimal(str(market.get("precision", {}).get("amount", "0.00001"))),
                 tick_size=Decimal(str(market.get("precision", {}).get("price", "0.01"))),
-                min_notional=Decimal(str(market.get("limits", {}).get("cost", {}).get("min", 0) or 0)),
+                # Quantity limits (Issue #113)
+                min_quantity=Decimal(str(amount_limits.get("min", 0) or 0)) if amount_limits.get("min") else None,
+                max_quantity=Decimal(str(amount_limits.get("max", 0) or 0)) if amount_limits.get("max") else None,
+                min_notional=Decimal(str(cost_limits.get("min", 0) or 0)) if cost_limits.get("min") else None,
                 contract_type=market.get("type", "spot"),
                 is_active=market.get("active", True),
                 maker_fee=Decimal(str(market.get("maker", 0) or 0)),

@@ -113,6 +113,7 @@ class RiskEngineConfig:
         enable_price_collar: Reject orders far from market
         price_collar_pct: Max deviation from mid-price (e.g., 0.05 = 5%)
         enable_precision_validation: Validate price/quantity precision
+        enable_quantity_limits_check: Validate min/max quantity per instrument
         max_modify_rate: Max order modifications per second
     """
 
@@ -127,6 +128,9 @@ class RiskEngineConfig:
 
     # Precision validation
     enable_precision_validation: bool = True
+
+    # Quantity limits validation (Issue #113)
+    enable_quantity_limits_check: bool = True  # Validate min/max quantity per instrument
 
     # Modify rate limiting (separate from submit)
     max_modify_rate: int = 20  # modifications per second
@@ -379,6 +383,10 @@ class RiskEngine:
         if self.config.enable_precision_validation and instrument is not None:
             checks.append(self._check_price_precision(order, instrument))
             checks.append(self._check_quantity_precision(order, instrument))
+
+        # Quantity limits validation (Issue #113)
+        if self.config.enable_quantity_limits_check and instrument is not None:
+            checks.append(self._check_quantity_limits(order, instrument))
 
         # Price collar (if enabled)
         if self.config.enable_price_collar and order.price is not None:
@@ -686,6 +694,42 @@ class RiskEngine:
             )
 
         return RiskCheckResult(passed=True, check_name="quantity_precision")
+
+    def _check_quantity_limits(self, order: Order, instrument: Instrument) -> RiskCheckResult:
+        """
+        Check if order quantity is within instrument limits (Issue #113).
+
+        Validates against exchange-defined min/max quantity limits.
+        These are separate from our own position limits.
+
+        Args:
+            order: Order to validate
+            instrument: Instrument with min/max quantity limits
+
+        Returns:
+            RiskCheckResult with pass/fail and reason
+        """
+        # Check minimum quantity
+        if instrument.min_quantity is not None:
+            min_qty = Decimal(str(instrument.min_quantity))
+            if min_qty > 0 and order.amount < min_qty:
+                return RiskCheckResult(
+                    passed=False,
+                    check_name="min_quantity",
+                    reason=f"Quantity {order.amount} below minimum {min_qty} for {instrument.symbol}",
+                )
+
+        # Check maximum quantity
+        if instrument.max_quantity is not None:
+            max_qty = Decimal(str(instrument.max_quantity))
+            if max_qty > 0 and order.amount > max_qty:
+                return RiskCheckResult(
+                    passed=False,
+                    check_name="max_quantity",
+                    reason=f"Quantity {order.amount} exceeds maximum {max_qty} for {instrument.symbol}",
+                )
+
+        return RiskCheckResult(passed=True, check_name="quantity_limits")
 
     def _check_price_collar(self, order: Order, current_price: Decimal) -> RiskCheckResult:
         """
@@ -1078,6 +1122,7 @@ class RiskEngine:
                 "price_collar": self.config.enable_price_collar,
                 "price_collar_pct": float(self.config.price_collar_pct),
                 "precision_validation": self.config.enable_precision_validation,
+                "quantity_limits_check": self.config.enable_quantity_limits_check,
                 "instrument_status_check": self.config.enable_instrument_status_check,
             },
         }
