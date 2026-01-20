@@ -74,6 +74,16 @@ from libra.backtest.engine import (
     BacktestConfig,
     BacktestEngine,
 )
+from libra.backtest.fill_model import (
+    FillModel,
+    FillModelType,
+    FillResult,
+    SlippageType,
+    create_conservative_model,
+    create_immediate_model,
+    create_order_book_model,
+    create_realistic_model,
+)
 from libra.backtest.factors import (
     BollingerBandFactor,
     Factor,
@@ -119,6 +129,15 @@ __all__ = [
     # Engine
     "BacktestEngine",
     "BacktestConfig",
+    # Fill Model (Issue #107)
+    "FillModel",
+    "FillModelType",
+    "FillResult",
+    "SlippageType",
+    "create_immediate_model",
+    "create_realistic_model",
+    "create_conservative_model",
+    "create_order_book_model",
     # Gateway (for unified strategies)
     "BacktestGateway",
     # Metrics

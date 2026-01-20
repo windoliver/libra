@@ -71,6 +71,8 @@ from libra.gateways.protocol import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from libra.backtest.fill_model import FillModel
+
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +186,7 @@ class PaperGateway(BaseGateway):
     def __init__(
         self,
         config: dict[str, Any] | None = None,
+        fill_model: FillModel | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -196,9 +199,11 @@ class PaperGateway(BaseGateway):
                 - slippage_bps: Basis points for fixed model
                 - maker_fee_bps: Maker fee in basis points
                 - taker_fee_bps: Taker fee in basis points
+            fill_model: Optional FillModel for advanced fill simulation (Issue #107)
             **kwargs: Additional arguments passed to BaseGateway
         """
         super().__init__(name="paper", config=config, **kwargs)
+        self._fill_model = fill_model
 
         # Parse config
         cfg = config or {}
@@ -430,14 +435,26 @@ class PaperGateway(BaseGateway):
         # Determine fill price (buy at ask, sell at bid)
         base_price = ask if order.side == OrderSide.BUY else bid
 
-        # Apply slippage
-        fill_price = self._apply_slippage(base_price, order.side, order.amount)
+        # Use FillModel if provided (Issue #107)
+        if self._fill_model is not None:
+            fill_result = self._fill_model.simulate_market_fill(
+                side=order.side,
+                quantity=order.amount,
+                current_price=base_price,
+                bar_volume=None,  # Volume not available in real-time
+            )
+            fill_price = fill_result.fill_price or base_price
+            fill_amount = fill_result.fill_quantity
+        else:
+            # Apply legacy slippage
+            fill_price = self._apply_slippage(base_price, order.side, order.amount)
+            fill_amount = order.amount
 
         # Check balance
         if order.side == OrderSide.BUY:
             # Need quote currency
             quote_currency = order.symbol.split("/")[1]
-            required = order.amount * fill_price
+            required = fill_amount * fill_price
             if self._get_available(quote_currency) < required:
                 raise InsufficientFundsError(
                     f"Insufficient {quote_currency}: need {required}, have {self._get_available(quote_currency)}"
@@ -445,17 +462,20 @@ class PaperGateway(BaseGateway):
         else:
             # Need base currency
             base_currency = order.symbol.split("/")[0]
-            if self._get_available(base_currency) < order.amount:
+            if self._get_available(base_currency) < fill_amount:
                 raise InsufficientFundsError(
-                    f"Insufficient {base_currency}: need {order.amount}, have {self._get_available(base_currency)}"
+                    f"Insufficient {base_currency}: need {fill_amount}, have {self._get_available(base_currency)}"
                 )
 
         # Execute fill
-        self._execute_fill(open_order, order.amount, fill_price, is_maker=False)
+        self._execute_fill(open_order, fill_amount, fill_price, is_maker=False)
 
         # Update status
-        open_order.status = OrderStatus.FILLED
-        open_order.filled_amount = order.amount
+        if fill_amount < order.amount:
+            open_order.status = OrderStatus.PARTIALLY_FILLED
+        else:
+            open_order.status = OrderStatus.FILLED
+        open_order.filled_amount = fill_amount
         open_order.average_price = fill_price
 
         self._orders[open_order.order_id] = open_order
@@ -495,6 +515,8 @@ class PaperGateway(BaseGateway):
         except GatewayError:
             return
 
+        current_price = (bid + ask) / 2  # Mid price for FillModel
+
         for order_id, open_order in list(self._orders.items()):
             if open_order.status not in (OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED):
                 continue
@@ -506,27 +528,55 @@ class PaperGateway(BaseGateway):
             if order.order_type != OrderType.LIMIT or order.price is None:
                 continue
 
-            # Check if order can be filled
-            should_fill = False
-            if (order.side == OrderSide.BUY and ask <= order.price) or (
-                order.side == OrderSide.SELL and bid >= order.price
-            ):
-                should_fill = True
+            remaining = order.amount - open_order.filled_amount
 
-            if should_fill:
-                # Fill at limit price (maker order)
-                remaining = order.amount - open_order.filled_amount
-                self._execute_fill(open_order, remaining, order.price, is_maker=True)
+            # Use FillModel if provided (Issue #107)
+            if self._fill_model is not None:
+                fill_result = self._fill_model.simulate_limit_fill(
+                    side=order.side,
+                    quantity=remaining,
+                    limit_price=order.price,
+                    current_price=current_price,
+                    bar_volume=None,
+                    time_at_price_pct=0.5,  # Assume mid-bar
+                )
 
-                # Update status
+                if not fill_result.filled:
+                    continue  # No fill this tick
+
+                fill_amount = fill_result.fill_quantity
+                fill_price = fill_result.fill_price or order.price
+            else:
+                # Legacy behavior: check if order can be filled
+                should_fill = False
+                if (order.side == OrderSide.BUY and ask <= order.price) or (
+                    order.side == OrderSide.SELL and bid >= order.price
+                ):
+                    should_fill = True
+
+                if not should_fill:
+                    continue
+
+                fill_amount = remaining
+                fill_price = order.price
+
+            # Execute the fill
+            self._execute_fill(open_order, fill_amount, fill_price, is_maker=True)
+
+            # Update status
+            new_filled = open_order.filled_amount + fill_amount
+            if new_filled >= order.amount:
                 open_order.status = OrderStatus.FILLED
                 open_order.filled_amount = order.amount
-                open_order.average_price = order.price
-
                 # Unlock remaining funds
                 self._unlock_order_funds(order)
+            else:
+                open_order.status = OrderStatus.PARTIALLY_FILLED
+                open_order.filled_amount = new_filled
 
-                logger.debug(f"{self.name}: Limit order filled: {order_id}")
+            open_order.average_price = fill_price
+
+            logger.debug(f"{self.name}: Limit order {'filled' if open_order.status == OrderStatus.FILLED else 'partially filled'}: {order_id}")
 
     def _execute_fill(
         self,
